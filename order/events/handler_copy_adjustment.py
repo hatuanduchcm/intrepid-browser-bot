@@ -611,9 +611,20 @@ def validate_total_adjustment(parsed: dict):
             nv = to_num(v)
         except Exception:
             nv = Decimal(0)
-        converted_map[str(k)] = int(nv.to_integral_value(rounding=ROUND_HALF_UP))
-        if k == total_key:
+        key_str = str(k)
+        # skip internal/debug keys (like __ocr_lines__, __total_check__) from logging and summing
+        if not key_str.startswith('__'):
+            converted_map[key_str] = int(nv.to_integral_value(rounding=ROUND_HALF_UP))
+
+        # skip the authoritative total key and any debug keys when summing
+        try:
+            is_total_key = (k == total_key)
+        except Exception:
+            is_total_key = False
+
+        if is_total_key or key_str.startswith('__'):
             continue
+
         s += nv
     # money is integer (smallest currency unit); compare as integers
     try:
