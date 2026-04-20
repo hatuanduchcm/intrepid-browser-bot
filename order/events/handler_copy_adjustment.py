@@ -10,11 +10,44 @@ from pathlib import Path
 import traceback
 import cv2
 import numpy as np
+import time
+import pyautogui
+from pathlib import Path
+from typing import Optional
+import re as _re
 
 DEBUG_DIR = Path(__file__).resolve().parents[2] / 'assets' / 'debug_matches'
 DEBUG_DIR.mkdir(parents=True, exist_ok=True)
 
 logger = logging.getLogger(__name__)
+
+def capture_debug_shots(cx: int, cy: int, pad_w: int = 700, pad_h: int = 1200):
+    """Capture and return crop_path.
+
+    We no longer save a full-shot; return crop_path.
+    """
+    crop_path = None
+    try:
+        # crop region around cursor (shifted where tooltips commonly appear)
+        try:
+            screen_w, screen_h = pyautogui.size()
+            x1 = int(max(0, cx - pad_w // 2))
+            # use shifted vertical region so popup is included
+            shift_y = int(min(screen_h - 1, cy + 40))
+            y2 = int(max(0, shift_y - pad_h // 2))
+            w_region = int(min(pad_w, screen_w - x1))
+            h_region2 = int(min(pad_h, screen_h - y2))
+            crop_path = DEBUG_DIR / f'popup_crop_{int(time.time())}.png'
+            region = pyautogui.screenshot(region=(x1, y2, w_region, h_region2))
+            region.save(str(crop_path))
+        except Exception:
+            logging.debug('Crop capture failed')
+            crop_path = None
+    except Exception as e:
+        logging.debug('screenshot capture failed: %s', e)
+
+    # We do not keep a full-shot file; return crop_path
+    return crop_path
 
 
 def handle_copy_adjustment_event(event_payload):
@@ -28,14 +61,14 @@ def handle_copy_adjustment_event(event_payload):
     # try to get tooltip data using layered strategies
     try:
         # first capture tooltip popup visually (hover/click) so we have images available
-        shot_path, crop_path = _hover_and_capture_tooltip(w)
+        crop_path = _hover_and_capture_tooltip(w)
 
         # then attempt: control-level tooltip or Pane scan (may succeed without OCR)
         # text = get_tooltip_data(w)
         # if text:
         #     return text
 
-        # finally, try OCR/template on captured images (prefer crop only; shot saved for archive)
+        # finally, try OCR/template on captured images (prefer crop only)
         text = get_tooltip_data(_path=crop_path)
         if text:
             # return the parsed dict as-is so caller can handle formatting
@@ -48,36 +81,39 @@ def handle_copy_adjustment_event(event_payload):
 
 def _hover_and_capture_tooltip(window):
     """Locate the question icon visually, hover/click it and capture screenshots.
-    Returns (shot_path, crop_path) where crop_path may be None.
+    Returns crop_path where crop_path may be None.
     """
-    try:
-        import pyautogui
-    except Exception:
-        logger.debug('pyautogui not available')
-        return (None, None)
 
     icon_path = Path(__file__).resolve().parents[2] / 'assets' / 'icons' / 'question.png'
-    shot_path = None
     crop_path = None
     try:
         try:
+            time.sleep(1)
             window.set_focus()
+            time.sleep(1.5)
         except Exception:
             logger.debug('set_focus failed, proceeding without focusing window')
 
         # try to scroll the page to the adjustment using Ctrl+F
-        try:
-            pyautogui.keyDown('ctrl')
-            pyautogui.press('f')
-            pyautogui.keyUp('ctrl')
-            time.sleep(1)
-            pyautogui.typewrite('Order Adjustment')
-            pyautogui.press('enter')
-            time.sleep(1)
-            shot_path = DEBUG_DIR / f'after_find_{int(time.time())}.png'
-            pyautogui.screenshot(str(shot_path))
-        except Exception as e:
-            logger.debug('Ctrl+F search failed: %s', e)
+        # try:
+        #     pyautogui.click(500, 500)
+        #     time.sleep(0.8)
+        #     pyautogui.hotkey('ctrl', 'f')
+        #     time.sleep(0.5)
+        #     pyautogui.typewrite('Order Adjustment', interval=0.05)
+
+        #     pyautogui.press('enter')
+        #     shot_path = DEBUG_DIR / f'after_find_{int(time.time())}.png'
+        #     pyautogui.screenshot(str(shot_path))
+        # except Exception as e:
+        #     logger.debug('Ctrl+F search failed: %s', e)
+
+        result = find_order_adjustment_block()
+
+        if result:
+            logger.info(f"Found at ({result['x']}, {result['y']})")
+        else:
+            logger.warning("Not found")
 
         if icon_path.exists():
             try:
@@ -99,36 +135,11 @@ def _hover_and_capture_tooltip(window):
                     pyautogui.moveTo(cx, cy, duration=0.2)
                     pyautogui.click(cx, cy)
                     time.sleep(0.35)
-                    shot_path = DEBUG_DIR / f'after_click_{int(time.time())}.png'
-                    pyautogui.screenshot(str(shot_path))
-                    time.sleep(0.6)
-                    # crop region around cursor
+                    # capture screenshots only when enabled via environment variable
                     try:
-                        # make a larger crop around the click to include full popup
-                        screen_w, screen_h = pyautogui.size()
-                        pad_w = 700
-                        pad_h = 800
-                        x1 = int(max(0, cx - pad_w // 2))
-                        y1 = int(max(0, cy - pad_h // 2))
-                        w_region = int(min(pad_w, screen_w - x1))
-                        h_region = int(min(pad_h, screen_h - y1))
-                        crop_path = DEBUG_DIR / f'popup_crop_cursor_{int(time.time())}.png'
-                        region = pyautogui.screenshot(region=(x1, y1, w_region, h_region))
-                        region.save(str(crop_path))
-                        # also save a downward-shifted crop in case popup is below the icon
-                        shift_y = int(min(screen_h - 1, cy + 40))
-                        y2 = int(max(0, shift_y - pad_h // 2))
-                        h_region2 = int(min(pad_h, screen_h - y2))
-                        crop_path2 = DEBUG_DIR / f'popup_crop_shifted_{int(time.time())}.png'
-                        region2 = pyautogui.screenshot(region=(x1, y2, w_region, h_region2))
-                        region2.save(str(crop_path2))
-                        # prefer the primary crop, but return both via concatenation later (we'll set crop_path to primary)
-                        # store extra path by returning tuple later via shot_path/crop_path handling
-                        # attach attribute on DEBUG_DIR for consumer (simple approach: also write a marker file)
-                        (DEBUG_DIR / 'last_extra_crop.txt').write_text(str(crop_path2))
+                        crop_path = capture_debug_shots(cx, cy)
                     except Exception:
-                        crop_path = shot_path
-                        logging.debug('Crop failed, using full screenshot as fallback')
+                        crop_path = None
             except Exception as e:
                 logger.debug('image locate/click failed: %s', e)
         else:
@@ -136,13 +147,101 @@ def _hover_and_capture_tooltip(window):
     except Exception as e:
         logger.debug('hover_and_capture failed: %s', e)
 
-    return (shot_path, crop_path)
+    return crop_path
 
+def find_order_adjustment_block(
+    max_scrolls: int = 30,
+    confidence: float = 0.8,
+    scroll_amount: int = -400,
+    delay: float = 0.5
+) -> Optional[dict]:
+    """
+    Scroll page and find Order Adjustment block using image recognition.
+    Icon path is embedded inside function.
+    """
+
+    icon_path = Path(__file__).resolve().parents[2] / 'assets' / 'icons' / 'order-adjustment-block.png'
+
+    if not icon_path.exists():
+        raise FileNotFoundError(f"Icon not found: {icon_path}")
+
+    for i in range(max_scrolls):
+        try:
+            match = pyautogui.locateOnScreen(
+                str(icon_path),
+                confidence=confidence,
+                grayscale=True
+            )
+
+            if match:
+                pyautogui.scroll(-200)  # small scroll to adjust for potential header overlap
+                center_x = match.left + match.width // 2
+                center_y = match.top + match.height // 2
+
+                pyautogui.click(center_x, center_y)
+
+                return {
+                    "found": True,
+                    "x": center_x,
+                    "y": center_y,
+                    "attempt": i
+                }
+
+        except Exception:
+            pass
+
+        pyautogui.scroll(scroll_amount)
+        time.sleep(delay)
+
+    # If not found after initial pass, try scrolling to top and repeat once
+    try:
+        logger.debug('Initial search failed; scrolling to top and retrying once')
+        # large positive scroll to move to top
+        try:
+            pyautogui.scroll(10000)
+        except Exception:
+            # best-effort fallback: small repeated upward scrolls
+            for _ in range(10):
+                pyautogui.scroll(800)
+                time.sleep(0.05)
+        time.sleep(0.6)
+
+        for i in range(max_scrolls):
+            try:
+                match = pyautogui.locateOnScreen(
+                    str(icon_path),
+                    confidence=confidence,
+                    grayscale=True
+                )
+
+                if match:
+                    pyautogui.scroll(-200)  # small scroll to adjust for potential header overlap
+                    center_x = match.left + match.width // 2
+                    center_y = match.top + match.height // 2
+
+                    pyautogui.click(center_x, center_y)
+
+                    return {
+                        "found": True,
+                        "x": center_x,
+                        "y": center_y,
+                        "attempt": i,
+                    }
+
+            except Exception:
+                pass
+
+            pyautogui.scroll(scroll_amount)
+            time.sleep(delay)
+    except Exception:
+        logger.debug('Retry from top failed', exc_info=True)
+
+    return None
 
 def get_tooltip_data(_path=None):
     """Attempt to extract tooltip text using control, UI-tree inspection, then image/OCR fallback.
 
-    If `shot_path` or `crop_path` are provided, use them for OCR/template matching.
+    Uses the provided crop path (`_path`) for OCR/template matching.
     """
     # 1) Try to find ToolTip or Text controls directly
     # try:
@@ -172,27 +271,27 @@ def get_tooltip_data(_path=None):
 
     # 3) OCR/template fallback using provided images
     # prefer pytesseract + PIL, but fall back to easyocr if available
-    # try:
-    #     import pytesseract
-    #     pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-    #     from PIL import Image
-    #     easyocr_reader = None
-    # except Exception:
-    #     logger.debug('pytesseract or PIL not available, trying easyocr')
-    #     pytesseract = None
-    #     try:
-    #         import easyocr
-    #         easyocr_reader = easyocr.Reader(['en'])
-    #     except Exception:
-    #         logger.debug('easyocr not available')
-    #         easyocr_reader = None
+    try:
+        import pytesseract
+        pytesseract.pytesseract.tesseract_cmd = r"C:\Users\hang.truong\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
+        from PIL import Image
+        easyocr_reader = None
+    except Exception:
+        logger.debug('pytesseract or PIL not available, trying easyocr')
+        pytesseract = None
+        try:
+            import easyocr
+            easyocr_reader = easyocr.Reader(['en'])
+        except Exception:
+            logger.debug('easyocr not available')
+            easyocr_reader = None
 
     # use shared OCR helper from utils
-    # try:
-    #     from utils.ocr import ocr_image, parse_ocr_text
-    # except Exception:
-    #     ocr_image = None
-    #     parse_ocr_text = None
+    try:
+        from utils.ocr import ocr_image, parse_ocr_text
+    except Exception:
+        ocr_image = None
+        parse_ocr_text = None
 
     # Run OCR on crop only (prefer crop for OCR; shot is kept for archive)
     try:
@@ -206,13 +305,32 @@ def get_tooltip_data(_path=None):
                     result['__total_check__'] = check
             except Exception:
                 logger.debug('Total validation failed', exc_info=True)
-            # persist a JSON-printable copy (convert enum keys to strings)
+
+            # persist only on validation failure to reduce debug clutter
             try:
                 printable = {str(k): v for k, v in result.items()} if isinstance(result, dict) else result
             except Exception:
                 printable = result
                 logging.debug('Failed to convert result to printable format', exc_info=True)
-            (DEBUG_DIR / 'adjustment_result.json').write_text(json.dumps(printable, ensure_ascii=False, indent=2))
+
+            try:
+                if isinstance(check, dict) and not check.get('matches'):
+                    # write a persistent error JSON and ensure jsonl has the record
+                    ts = int(time.time())
+                    err_file = DEBUG_DIR / f'adjustment_result_error_{ts}.json'
+                    err_file.write_text(json.dumps(printable, ensure_ascii=False, indent=2))
+            except Exception:
+                logger.exception('Failed to write adjustment_result error')
+
+            # cleanup crop artifact when totals match to reduce files
+            try:
+                if isinstance(check, dict) and check.get('matches') and _path:
+                    p = Path(_path)
+                    if p.exists():
+                        p.unlink()
+            except Exception:
+                logger.debug('Failed to remove crop artifact: %s', _path)
+
             return result
     except Exception as e:
         logger.debug('OCR/template fallback failed: %s', e)
@@ -230,19 +348,137 @@ def extract_adjustment_mapping_from_crop(_path):
     except Exception:
         ocr_image = None
         parse_ocr_text = None
-
     ocr_log = []
     if not _path:
         return None
+
+    # primary OCR attempt
     crop_ocr = ocr_image(_path) if ocr_image else None
-    if not crop_ocr:
+    if crop_ocr:
+        ocr_log.append(('crop', crop_ocr))
+    else:
+        # primary OCR produced nothing; attempt alternate scales immediately
+        try:
+            from utils.ocr import ocr_image_variants
+        except Exception:
+            ocr_image_variants = None
+
+        if ocr_image_variants:
+            try:
+                variants = ocr_image_variants(_path, scales=(3.0, 1.5, 4.0, 2.0))
+            except Exception:
+                variants = {}
+
+            for s, txt in (variants or {}).items():
+                ocr_log.append((f'scale_{s}', txt))
+                if not txt:
+                    continue
+                # try parsing/validating this variant
+                parsed_variant = None
+                try:
+                    parsed_variant = parse_lines_to_map(txt)
+                except Exception:
+                    parsed_variant = None
+                if parsed_variant:
+                    try:
+                        # attach raw lines
+                        if isinstance(parsed_variant, dict):
+                            parsed_variant['__ocr_lines__'] = [l.strip() for l in txt.splitlines() if l.strip()]
+                        chk = validate_total_adjustment(parsed_variant)
+                        if isinstance(parsed_variant, dict):
+                            parsed_variant['__total_check__'] = chk
+                    except Exception:
+                        logger.debug('Failed to attach validation to parsed variant', exc_info=True)
+                    return parsed_variant
+
         return None
-    ocr_log.append(('crop', crop_ocr))
-    if any(k in crop_ocr.lower() for k in ('refund', 'voucher', 'total adjustment')):
-        (DEBUG_DIR / 'ocr_text.txt').write_text('\n\n'.join(f"[{k}]\n{v}" for k, v in ocr_log))
-        parsed = parse_lines_to_map(crop_ocr)
+
+    # helper: parse text, attach ocr lines, validate totals; return parsed if valid or parsed anyway
+    def _try_parse_and_validate(text):
+        try:
+            parsed = parse_lines_to_map(text)
+        except Exception as e:
+            logger.debug('parse_lines_to_map failed for text variant', exc_info=True)
+            try:
+                (DEBUG_DIR / 'ocr_parse_error.txt').write_text(str(e))
+            except Exception:
+                logger.debug('Failed to write ocr_parse_error.txt')
+            return None
+
+        # attach raw OCR lines
+        try:
+            lines = [l.strip() for l in text.splitlines() if l.strip()]
+            if isinstance(parsed, dict):
+                parsed['__ocr_lines__'] = lines
+        except Exception:
+            logger.debug('Failed to attach OCR lines to parsed mapping')
+
+        # validate totals; if matches True return parsed
+        try:
+            check = validate_total_adjustment(parsed)
+            if isinstance(check, dict) and check.get('matches'):
+                return parsed
+        except Exception:
+            logger.debug('validate_total_adjustment raised for parsed mapping', exc_info=True)
+
         return parsed
-    return None
+
+    # try primary parsed result first
+    primary_parsed = _try_parse_and_validate(crop_ocr)
+    if primary_parsed:
+        try:
+            chk = validate_total_adjustment(primary_parsed)
+            if isinstance(primary_parsed, dict):
+                primary_parsed['__total_check__'] = chk
+        except Exception:
+            logger.debug('Failed to attach total check to primary_parsed', exc_info=True)
+        return primary_parsed
+
+    # if validation failed, attempt alternate OCR scales
+    try:
+        from utils.ocr import ocr_image_variants
+    except Exception:
+        ocr_image_variants = None
+
+    if ocr_image_variants:
+        try:
+            variants = ocr_image_variants(_path, scales=(3.0, 1.5, 4.0, 2.0))
+        except Exception:
+            variants = {}
+
+        for s, txt in (variants or {}).items():
+            ocr_log.append((f'scale_{s}', txt))
+            if not txt:
+                continue
+            parsed_variant = _try_parse_and_validate(txt)
+            if parsed_variant:
+                try:
+                    chk = validate_total_adjustment(parsed_variant)
+                    if isinstance(parsed_variant, dict):
+                        parsed_variant['__total_check__'] = chk
+                except Exception:
+                    logger.debug('Failed to attach total check to parsed_variant', exc_info=True)
+                try:
+                    (DEBUG_DIR / 'ocr_text.txt').write_text('\n\n'.join(f"[{k}]\n{v}" for k, v in ocr_log if v))
+                except Exception:
+                    logger.debug('Failed to write ocr_text.txt')
+                return parsed_variant
+
+    # persist OCR log for inspection and return the best-effort parsed mapping (may be None)
+    try:
+        (DEBUG_DIR / 'ocr_text.txt').write_text('\n\n'.join(f"[{k}]\n{v}" for k, v in ocr_log if v))
+    except Exception:
+        logger.debug('Failed to write ocr_text.txt')
+
+    # attach validation result to primary_parsed before returning
+    try:
+        if primary_parsed and isinstance(primary_parsed, dict):
+            chk = validate_total_adjustment(primary_parsed)
+            primary_parsed['__total_check__'] = chk
+    except Exception:
+        logger.debug('Failed to attach total check to primary_parsed at end', exc_info=True)
+
+    return primary_parsed
 
 def parse_lines_to_map(text: str):
     """Parse OCR text lines into a mapping ColumnName -> numeric string.
@@ -258,21 +494,12 @@ def parse_lines_to_map(text: str):
     # build label_map: ColumnName -> list(lowercase labels)
     label_map = {cname: [lbl.strip().lower() for lbl in labs if lbl and isinstance(lbl, str)] for cname, labs in ADJUSTMENT_COLUMNS.items()}
 
-    import re as _re
-
-    def split_text_and_number(line: str):
-        nums = _re.findall(r"[\-₫đ]?\d[\d\.,\s]*\d", line)
-        num = nums[-1].strip() if nums else ''
-        text_only = _re.sub(r"[0-9\-₫đ,\.]+", " ", line)
-        text_only = _re.sub(r"\s+", " ", text_only).strip().lower()
-        return text_only, num
-
-    from utils.amounts import trim_leading_integer_digits, process_amount_for_region
+    from utils.amounts import clean_amount
 
     # Iterate lines first, then check each column for a match
     for i, line in enumerate(lines):
         label_text, numeric = split_text_and_number(line)
-        if not label_text:
+        if not label_text or not numeric:
             continue
         for cname, labs in label_map.items():
             # try direct substring match first
@@ -280,59 +507,85 @@ def parse_lines_to_map(text: str):
             for lab in labs:
                 lab_l = lab.lower()
                 if lab_l in label_text:
-                    val = _re.sub(r"\s+", "", numeric or '')
-                    mapping[cname] = process_amount_for_region(val, 'VN')
-                    matched = True
+                    # val = _re.sub(r"\s+", "", numeric or '')
+                    mapping[cname] = clean_amount(numeric)
+                    # matched = True
                     break
-            if matched:
-                continue
+            # if matched:
+            #     continue
             # token-subset fallback
-            ltokens = set(t for t in _re.split(r"\W+", label_text) if t)
-            for lab in labs:
-                lab_tokens = set(t for t in _re.split(r"\W+", lab.lower()) if t)
-                if lab_tokens and lab_tokens <= ltokens:
-                    val = _re.sub(r"\s+", "", numeric or '')
-                    mapping[cname] = process_amount_for_region(val, 'VN')
-                    break
+            # ltokens = set(t for t in _re.split(r"\W+", label_text) if t)
+            # for lab in labs:
+            #     lab_tokens = set(t for t in _re.split(r"\W+", lab.lower()) if t)
+            #     if lab_tokens and lab_tokens <= ltokens:
+            #         # val = _re.sub(r"\s+", "", numeric or '')
+            #         mapping[cname] = drop_first_after_cleanup(numeric)
+            #         break
 
     return mapping
 
 
+def split_text_and_number(line: str):
+    if not line:
+        return "", ""
+    
+    # Remove special | character that may interfere with OCR parsing, replacing it with a space to preserve word boundaries
+    line = line.replace('|', '')
+
+    # match number-like block (keep raw format including $, ₫, -, ., etc.)
+    # allow an optional single currency-like char or single letter immediately
+    # before the digit sequence; also accept an optional sign and separators (., and spaces)
+    # This lets OCR outputs like 'd9 329' be captured as a single match which
+    # we then collapse to 'd9329'. Exclude '|' from the prefix group.
+    num_pattern = r"(?:(?<=^)|(?<=\s))[-+]?\s*(?:[^\w\s\|]|\w)?\s*\d[\d\.,\s]*"
+
+    nums = _re.findall(num_pattern, line)
+
+    # collapse internal whitespace in numeric token so 'd9 329' -> 'd9329'
+    num = _re.sub(r"\s+", "", nums[-1]).strip() if nums else ''
+
+    # remove number block from text
+    text_only = _re.sub(num_pattern, " ", line)
+
+    # normalize whitespace only
+    text_only = text_only.strip().lower()
+
+    return text_only, num
+
 def validate_total_adjustment(parsed: dict):
-    """If `parsed` contains `ColumnName.TOTAL_ADJUSTMENT_AMOUNT`, compute sum of others and
-    return {'expected_sum': s, 'total_value': total_val, 'matches': bool} or None if not applicable."""
+    """Return comparison using TOTAL_ADJUSTMENT_AMOUNT directly (no recompute sum)."""
     try:
         from gsheets.order_adjustment_sheet import ColumnName
     except Exception:
         return None
+
     total_key = ColumnName.TOTAL_ADJUSTMENT_AMOUNT
+
     if not isinstance(parsed, dict) or total_key not in parsed:
         return None
 
-    from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+    from decimal import Decimal, ROUND_HALF_UP
 
     def to_num(s):
         if not s:
-            return 0.0
+            return Decimal(0)
         ss = str(s)
-        # remove common separators, currency symbols and whitespace
-        ss = ss.replace(',', '').replace('₫', '').replace('đ', '')
+        # remove common thousand separators and currency letters
+        ss = ss.replace(',', '').replace('.', '').replace('₫', '').replace('đ', '')
         import re as __re
         ss = __re.sub(r"\s+", "", ss)
-        # apply region-specific trimming if helper available
+
         try:
             from utils.amounts import process_amount_for_region
             ss = process_amount_for_region(ss)
         except Exception:
             pass
+
         try:
             return Decimal(ss)
         except Exception:
             m = __re.search(r"-?\d+[\d\.]*", ss)
-            try:
-                return Decimal(m.group(0)) if m else Decimal(0)
-            except Exception:
-                return Decimal(0)
+            return Decimal(m.group(0)) if m else Decimal(0)
 
     # allow keys as enum, string(enum), or header string
     total_val = None
@@ -351,15 +604,45 @@ def validate_total_adjustment(parsed: dict):
         else:
             total_val = to_num(parsed.get(total_key, '0'))
     s = Decimal(0)
+    # also build per-key converted map for logging
+    converted_map = {}
     for k, v in parsed.items():
+        try:
+            nv = to_num(v)
+        except Exception:
+            nv = Decimal(0)
+        converted_map[str(k)] = int(nv.to_integral_value(rounding=ROUND_HALF_UP))
         if k == total_key:
             continue
-        s += to_num(v)
+        s += nv
     # money is integer (smallest currency unit); compare as integers
     try:
-        s_int = int(s.to_integral_value(rounding=ROUND_HALF_UP))
-        total_int = int(Decimal(total_val).to_integral_value(rounding=ROUND_HALF_UP))
+        sum_others_int = int(s.to_integral_value(rounding=ROUND_HALF_UP))
+        total_val_int = int(Decimal(total_val).to_integral_value(rounding=ROUND_HALF_UP))
     except Exception:
-        s_int = int(s)
-        total_int = int(total_val)
-    return {'expected_sum': int(s_int), 'total_value': int(total_int), 'matches': s_int == total_int}
+        sum_others_int = int(s)
+        total_val_int = int(total_val)
+
+    # expected_sum should come from TOTAL_ADJUSTMENT_AMOUNT; compare with sum of other values
+    matches = (total_val_int == sum_others_int)
+
+    if not matches:
+        # persist mismatch record (append JSON lines)
+        try:
+            record = {
+                'ts': int(time.time()),
+                'raw_parsed': {str(k): v for k, v in parsed.items()},
+                'converted_map': converted_map,
+                'expected_sum': int(total_val_int),
+                'total_value': int(sum_others_int),
+                'matches': matches,
+            }
+            out_p = DEBUG_DIR / 'adjustment_validation_errors.jsonl'
+            with out_p.open('a', encoding='utf-8') as f:
+                # write a human-readable JSON block per record and separate records with ---
+                f.write(json.dumps(record, ensure_ascii=False, indent=2) + "\n")
+                f.write("---\n")
+        except Exception:
+            logger.exception('Failed to write adjustment validation error')
+
+    return {'expected_sum': int(total_val_int), 'total_value': int(sum_others_int), 'matches': matches}

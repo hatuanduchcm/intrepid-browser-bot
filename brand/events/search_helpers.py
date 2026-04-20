@@ -47,7 +47,7 @@ def click_shopee_shop_icon(confidences=(0.95, 0.85, 0.8), timeout: float = 4.0) 
                         return True
                 except Exception as e:
                     logger.debug('Error locating brand icon at confidence %s: %s', conf, e)
-            time.sleep(0.25)
+            time.sleep(1)
     except Exception as e:
         logger.debug('Error in click_brand_icon: %s', e)
     return False

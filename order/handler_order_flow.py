@@ -42,11 +42,11 @@ def handle_order_flow_event(event_payload):
         result['adjustment_text'] = txt
     except Exception as e:
         logger.debug('copy_adjustment failed: %s', e)
-    finally:
-        try:
-            closed = close_tab_event()
-            logger.debug('close_tab_event invoked, result=%s', closed)
-        except Exception:
-            logger.debug('close_tab_event failed', exc_info=True)
+
+    try:
+        closed = close_tab_event()
+        logger.debug('close_tab_event invoked, result=%s', closed)
+    except Exception:
+        logger.debug('close_tab_event failed', exc_info=True)
 
     return result

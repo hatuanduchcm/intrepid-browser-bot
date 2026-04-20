@@ -3,7 +3,7 @@ from pathlib import Path
 from PIL import Image
 import pytesseract
 from pytesseract import pytesseract as _pyt
-_pyt.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+_pyt.tesseract_cmd = r"C:\Users\hang.truong\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
 
 
 def image_to_text(image_path: str) -> str:

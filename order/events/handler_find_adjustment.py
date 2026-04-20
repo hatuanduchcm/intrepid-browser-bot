@@ -13,18 +13,18 @@ def handle_find_adjustment_event(event_payload):
     if not w:
         raise RuntimeError('Intrepid window not found')
 
-    try:
-        # Try to find a control with text 'Order Adjustment'
-        item = w.child_window(title_re='.*Order Adjustment.*', control_type='Text')
-        if item and item.exists():
-            try:
-                item.set_focus()
-            except Exception:
-                pass
-            logger.debug('Found Order Adjustment control: %s', item)
-            return True
-    except Exception as e:
-        logger.debug('find_adjustment lookup failed: %s', e)
+    # try:
+    #     # Try to find a control with text 'Order Adjustment'
+    #     item = w.child_window(title_re='.*Order Adjustment.*', control_type='Text')
+    #     if item and item.exists():
+    #         try:
+    #             item.set_focus()
+    #         except Exception:
+    #             pass
+    #         logger.debug('Found Order Adjustment control: %s', item)
+    #         return True
+    # except Exception as e:
+    #     logger.debug('find_adjustment lookup failed: %s', e)
 
     # fallback: search all text controls
     try:

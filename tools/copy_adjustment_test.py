@@ -37,7 +37,7 @@ def ocr_image(path: str):
     try:
         import pytesseract
         from pytesseract import pytesseract as _pyt
-        _pyt.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+        _pyt.tesseract_cmd = r"C:\Users\hang.truong\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
         try:
             # general OCR
             text = pytesseract.image_to_string(Image.open(str(proc_path)), config='--psm 6 --oem 3')
@@ -68,7 +68,7 @@ def ocr_image(path: str):
         # final fallback: try calling tesseract binary via subprocess (handles quoted path)
         try:
             import subprocess
-            tesseract_bin = r"C:\Program Files\Tesseract-OCR\tesseract"
+            tesseract_bin = r"C:\Users\hang.truong\AppData\Local\Programs\Tesseract-OCR\tesseract"
             out_txt = str(proc_path) + '_tess_out'
             # use list form to avoid shell parsing issues
             cmd = [tesseract_bin, str(proc_path), out_txt, '-l', 'vie']

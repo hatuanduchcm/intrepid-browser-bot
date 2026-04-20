@@ -39,8 +39,14 @@ def handle_open_order_event(event_payload):
                 if brand is not None and not _should_process_brand(brand):
                     logging.debug('Skipping open_order because brand "%s" same as last processed', brand)
                 else:
-                    if not _navigate_to_order_portal(edits):
+                    navigated = _navigate_to_order_portal(edits)
+                    if not navigated:
                         logger.debug('navigate_to_order_portal failed')
+                        # dismiss any obstructing popup ads that may appear after navigation
+                        try:
+                            _dismiss_popups()
+                        except Exception as e:
+                            logger.debug('dismiss_popups failed: %s', e)
 
                 # find and fill the order ID input (uses control descendants or image fallback)
                 try:
@@ -74,10 +80,13 @@ def handle_open_order_event(event_payload):
                         import pyautogui
                         box_img = Path(__file__).resolve().parents[2] / 'assets' / 'icons' / 'order_id_box.png'
                         if box_img.exists():
-                            m = pyautogui.locateCenterOnScreen(str(box_img), confidence=0.5)
+                            m = pyautogui.locateCenterOnScreen(str(box_img), confidence=0.8)
+
                             if m:
-                                pyautogui.click(m.x, m.y)
-                                time.sleep(4)
+                                pyautogui.moveTo(m.x, m.y, duration=0.5)  # di chuyển chậm
+                                time.sleep(0.3)                           # nghỉ nhẹ trước khi click
+                                pyautogui.click()
+                                time.sleep(6)
                                 return True
                             else:                               
                                 logger.debug('Order ID box image not found on screen')
@@ -115,21 +124,71 @@ def _navigate_to_order_portal(edits) -> bool:
         addr = edits_sorted[0]
         # focus address/control and try to set URL directly (preferred for non-standard browsers)
         addr.set_focus()
-        time.sleep(0.2)
+        time.sleep(3)
         url = f'https://banhang.shopee.vn/portal/sale/order'
         try:
             addr.set_text(url)
+            time.sleep(0.5)
         except Exception:
             # fallback: type into the focused control (previous approach that worked)
             send_keys('^a{BACKSPACE}')
             time.sleep(0.5)
             send_keys(url)
         send_keys('{ENTER}')
-        time.sleep(7.0)
+        time.sleep(11.0)
         return True
     except Exception as e:
         logger.debug('navigate_to_order_portal error: %s', e)
         return False
+
+
+def _dismiss_popups(max_attempts: int = 2, icon_name: str = 'close-popup.png', confidence: float = 0.85, click_delay: float = 0.25, pause_between: float = 1):
+    """Try to find and click popup close buttons repeatedly until none remain or max attempts reached.
+
+    Looks for `assets/icons/<icon_name>` on screen and clicks center when found. Waits `pause_between`
+    seconds between attempts to let UI stabilize. Best-effort; does not raise on failures.
+    """
+    try:
+        import pyautogui
+    except Exception:
+        logger.debug('pyautogui not available for dismissing popups')
+        return
+
+    icon_path = Path(__file__).resolve().parents[2] / 'assets' / 'icons' / icon_name
+    if not icon_path.exists():
+        logger.debug('Popup close icon not found: %s', icon_path)
+        return
+
+    attempts = 0
+    while attempts < max_attempts:
+        attempts += 1
+        try:
+            matches = list(pyautogui.locateAllOnScreen(str(icon_path), confidence=confidence))
+        except Exception as e:
+            logger.debug('locateAllOnScreen error while dismissing popups: %s', e)
+            matches = []
+
+        if not matches:
+            # nothing found, stop early
+            return
+
+        # click each found close button, from topmost-first
+        matches_sorted = sorted(matches, key=lambda m: m.top)
+        for m in matches_sorted:
+            try:
+                cx = m.left + m.width // 2
+                cy = m.top + m.height // 2
+                pyautogui.moveTo(cx, cy, duration=0.15)
+                time.sleep(0.05)
+                pyautogui.click()
+                time.sleep(click_delay)
+            except Exception as e:
+                logger.debug('clicking popup close failed: %s', e)
+                continue
+
+        time.sleep(pause_between)
+
+    logger.debug('dismiss_popups reached max attempts (%d) and stopped', max_attempts)
 
 
 def _type_order_id_into_control(input_control, order_id: str) -> bool:
@@ -196,16 +255,18 @@ def _find_and_fill_order_input(edits, order_id: str) -> bool:
             if m:
                 pyautogui.click(m.x, m.y)
                 time.sleep(0.2)
-                pyautogui.typewrite(str(order_id))
+                pyautogui.typewrite(str(order_id), interval=0.05)
                 pyautogui.press('enter')
+                time.sleep(2)
                 # best-effort: clear the input after submitting
                 try:
                     pyautogui.click(m.x, m.y)
                     pyautogui.hotkey('ctrl', 'a')
                     pyautogui.press('backspace')
+                    time.sleep(0.5)
                 except Exception:
-                    pass
-                return True
+                    logging.debug('Failed to clear order ID input after submission, continuing anyway')
+                return False
             else:
                 logger.debug('Order ID input image not found on screen')
     except Exception as e:

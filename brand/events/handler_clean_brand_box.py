@@ -23,13 +23,16 @@ def handle_clean_brand_box(event_payload=None):
         pyautogui.click(x, y)
         time.sleep(0.08)
         try:
-            pyautogui.hotkey('ctrl', 'a')
+            pyautogui.hotkey('ctrl', 'a', interval=0.05)
             time.sleep(0.04)
-            pyautogui.press('backspace')
+            pyautogui.press('backspace', presses=2, interval=0.02)
+            # Move mouse out of box
+            pyautogui.moveTo(10, 10)
+            time.sleep(0.2)
         except Exception:
             # fallback: send several backspaces
             for _ in range(6):
-                pyautogui.press('backspace')
+                pyautogui.press('backspace', presses=2, interval=0.02)
                 time.sleep(0.02)
         return True
     except Exception as e:

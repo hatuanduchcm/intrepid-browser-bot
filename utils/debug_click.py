@@ -11,7 +11,7 @@ def save_last_search_click(x, y, fname: str = 'last_search_click.json'):
     Casts to int to avoid numpy types when serializing.
     """
     try:
-        dbg = Path(__file__).resolve().parents[2] / 'assets' / 'debug_matches'
+        dbg = Path(__file__).resolve().parents[1] / 'assets' / 'debug_matches'
         dbg.mkdir(parents=True, exist_ok=True)
         outp = dbg / fname
         x_val = int(x)

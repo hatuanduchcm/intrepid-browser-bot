@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
 def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = None):
     """Orchestrate batch processing:
 
-    1. Extract order index map from the given sheet (order -> row/index and metadata).
+    1. Extract order index map from the given sheet (order -> row/index and metadata).Browser
+    
     2. Loop over each order_id and fetch adjustment info
     3. After processing, upload relevant adjustment info back to the sheet via `update_columns_for_order`.
 

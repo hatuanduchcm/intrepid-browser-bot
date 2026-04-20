@@ -67,9 +67,9 @@ def start_and_search_brand(brand_name: str):
     # skip 2FA helper if this brand was previously verified
     if brand_name and is_brand_verified(brand_name):
         logging.debug('Brand "%s" previously verified via 2FA; skipping 2FA helper', brand_name)
-    else:
-        if handle_2fa(timeout_seconds=3.0, post_click_delay=1.0, brand=brand_name):
-            raise RuntimeError('2FA OTP prompt detected after selecting brand, user may need to enter OTP')
+    # else:
+    #     if handle_2fa(timeout_seconds=3.0, post_click_delay=1.0, brand=brand_name):
+    #         raise RuntimeError('2FA OTP prompt detected after selecting brand, user may need to enter OTP')
 
     # mark as processed and record positive result
     global LAST_PROCESSED_BRAND

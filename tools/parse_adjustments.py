@@ -118,30 +118,37 @@ def parse_lines_to_map(text: str):
         for key in ADJUSTMENT_COLUMN_KEYS:
             if key.lower() in line.lower():
                 # extract value: last token that looks like a number or has currency symbol
-                m = re.findall(r"[\-₫đ]?[0-9][0-9\.,\s]*", line)
+                m = re.findall(r"[-+]?\s*[\$₫đ]?\s*\d[\d\.,\s]*", line)
                 val = m[-1].strip() if m else ''
                 mapping[key] = val
                 break
     return mapping
 
 
+import re
+
 def fix_values(mapping: dict):
-    money_k = re.compile(r"refund|shipping|voucher|commission|service|adjustment", re.IGNORECASE)
     out = {}
+
     for k, v in mapping.items():
         if not v:
             out[k] = v
             continue
+
         t = v.strip()
-        # if already has currency symbol, keep
-        if '₫' in t or 'đ' in t:
-            out[k] = t
-            continue
-        # heuristic: if label suggests money and value starts with 9 or 4, convert leading char to ₫
-        if money_k.search(k) and (t[0] == '9' or t[0] == '4'):
-            out[k] = '₫' + t[1:]
-        else:
-            out[k] = t
+
+        # 1. remove weird chars except digits, dot, comma, minus
+        t = re.sub(r"[^\d\.,\-]", "", t)
+
+        # 2. remove first char if it's not digit or '-'
+        if t and not (t[0].isdigit() or t[0] == "-"):
+            t = t[1:]
+
+        # 3. ensure minus only at start (clean cases like "--123")
+        t = re.sub(r"(?!^)-", "", t)
+
+        out[k] = t
+
     return out
 
 

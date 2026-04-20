@@ -1,59 +1,56 @@
 from typing import Optional
 
+import re
+import logging
 
-def trim_leading_integer_digits(amount: Optional[str], keep_last_n: int = 3) -> Optional[str]:
-    """Trim leading digits of the integer part so only the last `keep_last_n` digits remain.
+logger = logging.getLogger(__name__)
 
-    Examples: '-4269.500' -> '-269.500' when keep_last_n=3.
-    If no decimal part, preserve sign.
+def clean_amount(amount: Optional[str]) -> Optional[str]:
+    """Remove separators, detach leading '-', drop the first character of the remaining
+    digits (if any), then reapply the '-' if it existed.
+
+    Examples:
+      '53.000' -> '3000'
+      '4143.300' -> '143300'
+      '$116.926' -> '16926'
+      '-11.234' -> '-1234'
     """
-    if not amount:
-        return amount
-    s = amount.strip()
-    sign = ''
-    if s.startswith('-'):
-        sign = '-'
-        s = s[1:]
-    s = s.replace(',', '')
-    parts = s.split('.')
-    intp = parts[0] if parts else ''
-    frac = parts[1] if len(parts) > 1 else ''
-    # Simplified behavior: remove the first digit of the integer part if present
-    if len(intp) > 1:
-        intp = intp[1:]
-    out = sign + intp
-    if frac:
-        out = out + '.' + frac
-    return out
+    try:
+        if amount is None:
+            return None
 
+        raw = str(amount).strip()
 
-def process_amount_for_region(amount: Optional[str], region: str = '') -> Optional[str]:
-    """Apply region-specific normalization to `amount` string.
-
-    Currently: if region indicates Vietnam ('vn' or 'vietnam'), trim leading integer digits to keep last 3.
-    """
-    if not amount:
-        return amount
-    if not region:
-        return amount
-    r = region.strip().lower()
-    if r in ('vn', 'vietnam'):
-        # normalize common VN formatting: dots often used as thousand separators
-        s = amount.strip()
+        # detect and detach leading sign
         sign = ''
-        if s.startswith('-'):
+        if raw.startswith('-'):
             sign = '-'
-            s = s[1:]
-        # if there's a comma used as decimal separator, convert to dot
-        if ',' in s and not '.' in s:
-            s = s.replace(',', '.')
-        # if dot appears and the part after dot has 3 digits, treat as thousand separator and remove dots
-        import re
-        parts = s.split('.')
-        if len(parts) > 1 and all(re.fullmatch(r"\d{3}", p) for p in parts[1:]):
-            # remove all dots
-            s = s.replace('.', '')
-        # reattach sign and apply trimming
-        s = sign + s
-        return trim_leading_integer_digits(s)
-    return amount
+            raw = raw[1:].lstrip()
+
+        # detect leading non-digit character (treat as the single char to remove)
+        currency_first = False
+        if raw and not raw[0].isdigit():
+            currency_first = True
+            # remove that leading non-digit character from the raw string
+            raw = raw[1:].lstrip()
+
+        # keep digits and separators only from the remaining text
+        digits_and_sep = re.sub(r"[^\d\.,]", "", raw)
+
+        # remove thousand separators and commas
+        digits = digits_and_sep.replace('.', '').replace(',', '')
+
+        if not digits:
+            return sign + digits
+
+        # If the original first non-space char was a non-digit (currency etc.),
+        # we've already consumed that as the "one char to remove" — so keep all remaining digits.
+        # Otherwise: drop the first character of the digit string.
+        if not currency_first:
+            digits = digits[1:] if len(digits) > 0 else ''
+
+        return sign + digits
+    except Exception:
+        logger.exception('drop_first_after_cleanup failed for input: %r', amount)
+        return amount
+

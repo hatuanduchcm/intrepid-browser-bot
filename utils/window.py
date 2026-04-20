@@ -115,7 +115,7 @@ def get_intrepid_window(timeout=5):
     global _INTREPID_WINDOW
     if _INTREPID_WINDOW is not None:
         try:
-            _INTREPID_WINDOW.set_focus()
+            # _INTREPID_WINDOW.set_focus()
             return _INTREPID_WINDOW
         except Exception:
             _INTREPID_WINDOW = None

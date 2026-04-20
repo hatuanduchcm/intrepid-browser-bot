@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from typing import Dict
 
-CACHE_PATH = Path(__file__).resolve().parents[2] / 'assets' / 'debug_matches' / 'twofa_cache.json'
+CACHE_PATH = Path(__file__).resolve().parents[1] / 'assets' / 'debug_matches' / 'twofa_cache.json'
 
 
 def _load_cache() -> Dict[str, bool]:

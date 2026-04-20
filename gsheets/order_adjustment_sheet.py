@@ -39,6 +39,7 @@ class ColumnName(Enum):
     PROMO_CODE_PAID_BY_SELLER = 'PROMO_CODE_PAID_BY_SELLER'
     ORIGINAL_PRODUCT_PRICE = 'ORIGINAL_PRODUCT_PRICE'
     GAP = 'GAP'
+    COFUND_VOUCHER_SPONSORED_BY_SELLER = 'COFUND_VOUCHER_SPONSORED_BY_SELLER'
     TOTAL_ADJUSTMENT_AMOUNT = 'TOTAL_ADJUSTMENT_AMOUNT'
 
 
@@ -53,12 +54,13 @@ ADJUSTMENT_COLUMNS = {
     ColumnName.ACTUAL_SHIPPING_FEE: ["Actual Shipping Fee"],
     ColumnName.SHIPPING_FEE_PAID_BY_BUYER: ["Shipping Fee Paid by Buyer", "Shipping Fee Paid by"],
     ColumnName.SELLER_PAID_SHIPPING_FEE_SST: ["Seller Paid Shipping Fee SST", "Seller Paid Shipping"],
-    ColumnName.REVERSE_SHIPPING_FEE: ["Reverse Shipping Fee"],
     ColumnName.REVERSE_SHIPPING_FEE_SST: ["Reverse Shipping Fee SST"],
+    ColumnName.REVERSE_SHIPPING_FEE: ["Reverse Shipping Fee"],
     ColumnName.COMMISSION_FEE: ["Commission Fee"],
     ColumnName.TRANSACTION_FEE: ["Transaction Fee"],
     ColumnName.SERVICE_FEE: ["Service Fee"],
     ColumnName.AMS_COMMISSION_FEE: ["AMS Commission Fee"],
+    ColumnName.COFUND_VOUCHER_SPONSORED_BY_SELLER: ["Cofund Voucher Sponsored by Seller", "Cofund Voucher Sponsored by", "Cofund Voucher Sponsored"],
     ColumnName.VOUCHER_SPONSORED_BY_SELLER: ["Voucher Sponsored by Seller"],
     ColumnName.PRODUCT_DISCOUNT_REBATE_FROM_SHOPEE: ["Product Discount Rebate from Shopee"],
     ColumnName.PROMO_CODE_PAID_BY_SELLER: ["Promo Code Paid By Seller"],
@@ -87,6 +89,7 @@ GSHEET_COLUMN = {
     ColumnName.PROMO_CODE_PAID_BY_SELLER: "Promo Code Paid By Seller",
     ColumnName.ORIGINAL_PRODUCT_PRICE: "Original product price",
     ColumnName.GAP: "Gap",
+    ColumnName.COFUND_VOUCHER_SPONSORED_BY_SELLER: "Cofund Voucher Sponsored by Seller",
     ColumnName.TOTAL_ADJUSTMENT_AMOUNT: "Total Adjustment Amount",
 }
 
@@ -182,6 +185,14 @@ def update_columns_for_order(sheet_id: str, sheet_name: str, order_id: str, upda
     header_map = {h: i + 1 for i, h in enumerate(header)}  # name -> col number (1-based)
 
     # Validate requested columns exist
+    # Ensure we push all known GSHEET columns on every update (not only those with values)
+    try:
+        for col in ADJUSTMENT_COLUMN_KEYS:
+            if col not in updates:
+                updates[col] = ''
+    except Exception:
+        pass
+
     missing = [c for c in updates.keys() if c not in header_map]
     if missing:
         logger.warning('Requested update columns missing in sheet: %s', missing)
@@ -263,7 +274,7 @@ def extract_order_index_map(sheet_id: str, sheet_name: str, output_path: str = N
         return None
 
     venture_col = find_col(['Venture'])
-    brand_col = find_col(['Brand Name', 'Brand'])
+    brand_col = find_col(['Platform'])
     platform_col = find_col(['Platform'])
     order_col = find_col(['Order ID', 'OrderID', 'Order'])
 

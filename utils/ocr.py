@@ -5,7 +5,7 @@ import cv2
 logger = logging.getLogger(__name__)
 
 
-def ocr_image(path, tesseract_cmd=r"C:\Program Files\Tesseract-OCR\tesseract.exe"):
+def ocr_image(path, tesseract_cmd=r"C:\Users\hang.truong\AppData\Local\Programs\Tesseract-OCR\tesseract.exe", scale: float = 3.0):
     """Run OCR on image path with preprocessing. Returns text or None."""
     try:
         import pytesseract
@@ -26,7 +26,7 @@ def ocr_image(path, tesseract_cmd=r"C:\Program Files\Tesseract-OCR\tesseract.exe
     try:
         img = cv2.imread(str(p))
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        gray = cv2.resize(gray, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+        gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
         _, th = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         proc_path = p.parent / f'proc_{p.stem}.png'
         cv2.imwrite(str(proc_path), th)
@@ -46,23 +46,31 @@ def ocr_image(path, tesseract_cmd=r"C:\Program Files\Tesseract-OCR\tesseract.exe
     return None
 
 
-def parse_ocr_text(text):
-    """Parse OCR text into adjustment mapping using tools.parse_adjustments helpers.
-    Returns corrected mapping dict or None.
+def ocr_image_variants(path, tesseract_cmd=r"C:\Users\hang.truong\AppData\Local\Programs\Tesseract-OCR\tesseract.exe", scales=(3.0, 1.5, 4.0)):
+    """Run OCR using multiple preprocessing scales and return a mapping scale->text (or None).
+
+    This does not choose among results; caller can use these variants when validation
+    of the primary OCR result fails.
     """
-    try:
-        # tools.parse_adjustments is test code; import if available
-        from tools.parse_adjustments import parse_lines_to_map, fix_values
-    except Exception:
+    results = {}
+    for s in scales:
         try:
-            from parse_adjustments import parse_lines_to_map, fix_values
+            results[float(s)] = ocr_image(path, tesseract_cmd=tesseract_cmd, scale=float(s))
         except Exception:
-            # no parse_adjustments available in this environment
-            return None
-    try:
-        mapping = parse_lines_to_map(text)
-        corrected = fix_values(mapping)
-        return corrected
-    except Exception:
-        logger.debug('parse_ocr_text failed', exc_info=True)
-        return None
+            logger.debug('ocr_image failed for scale %s', s, exc_info=True)
+            results[float(s)] = None
+    return results
+
+
+def ocr_image_first_success(path, tesseract_cmd=r"C:\Users\hang.truong\AppData\Local\Programs\Tesseract-OCR\tesseract.exe", scales=(3.0, 1.5, 4.0)):
+    """Try OCR at each scale and return the first non-empty result and its scale.
+
+    Returns a tuple (text, scale) where text is None if nothing succeeded.
+    """
+    variants = ocr_image_variants(path, tesseract_cmd=tesseract_cmd, scales=scales)
+    for s in scales:
+        txt = variants.get(float(s))
+        if txt:
+            return txt, float(s)
+    return None, None
+
