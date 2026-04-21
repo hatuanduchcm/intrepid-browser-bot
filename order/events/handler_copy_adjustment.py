@@ -58,6 +58,8 @@ def handle_copy_adjustment_event(event_payload):
     if not w:
         raise RuntimeError('Intrepid window not found')
 
+    venture = (event_payload.get('venture') or '').strip().upper()
+
     # try to get tooltip data using layered strategies
     try:
         # first capture tooltip popup visually (hover/click) so we have images available
@@ -69,7 +71,7 @@ def handle_copy_adjustment_event(event_payload):
         #     return text
 
         # finally, try OCR/template on captured images (prefer crop only)
-        text = get_tooltip_data(_path=crop_path)
+        text = get_tooltip_data(_path=crop_path, venture=venture)
         if text:
             # return the parsed dict as-is so caller can handle formatting
             return text
@@ -122,7 +124,7 @@ def _hover_and_capture_tooltip(window):
                 deadline = time.time() + 3.0
                 while time.time() < deadline:
                     try:
-                        matches = list(pyautogui.locateAllOnScreen(str(icon_path), confidence=0.8))
+                        matches = list(pyautogui.locateAllOnScreen(str(icon_path), confidence=0.7))
                         if matches:
                             break
                     except Exception as e:
@@ -160,77 +162,49 @@ def find_order_adjustment_block(
     Icon path is embedded inside function.
     """
 
-    icon_path = Path(__file__).resolve().parents[2] / 'assets' / 'icons' / 'order-adjustment-block.png'
+    _icons_dir = Path(__file__).resolve().parents[2] / 'assets' / 'icons'
+    _candidates = [
+        _icons_dir / c for c in ['order-adjustment-block.png', 'order-adjustment-block-2.png', 'order-adjustment-block-3.png']
+        if (_icons_dir / c).exists()
+    ]
 
-    if not icon_path.exists():
-        raise FileNotFoundError(f"Icon not found: {icon_path}")
+    if not _candidates:
+        raise FileNotFoundError('No adjustment block icon found in assets/icons/')
+
+    def _try_all_icons_at_current_position():
+        """Try all candidate icons at the current scroll position. Returns result dict or None."""
+        for _p in _candidates:
+            try:
+                match = pyautogui.locateOnScreen(str(_p), confidence=confidence, grayscale=True)
+                if match:
+                    pyautogui.scroll(-200)
+                    center_x = match.left + match.width // 2
+                    center_y = match.top + match.height // 2
+                    pyautogui.click(center_x, center_y)
+                    logger.debug('Found adjustment block via %s', _p.name)
+                    return {"found": True, "x": center_x, "y": center_y}
+            except Exception as e:
+                logger.debug('locateOnScreen failed for %s: %s', _p.name, e)
+        return None
 
     for i in range(max_scrolls):
-        try:
-            match = pyautogui.locateOnScreen(
-                str(icon_path),
-                confidence=confidence,
-                grayscale=True
-            )
-
-            if match:
-                pyautogui.scroll(-200)  # small scroll to adjust for potential header overlap
-                center_x = match.left + match.width // 2
-                center_y = match.top + match.height // 2
-
-                pyautogui.click(center_x, center_y)
-
-                return {
-                    "found": True,
-                    "x": center_x,
-                    "y": center_y,
-                    "attempt": i
-                }
-
-        except Exception:
-            pass
-
+        result = _try_all_icons_at_current_position()
+        if result:
+            result['attempt'] = i
+            return result
         pyautogui.scroll(scroll_amount)
         time.sleep(delay)
 
-    # If not found after initial pass, try scrolling to top and repeat once
+    # retry from top
     try:
-        logger.debug('Initial search failed; scrolling to top and retrying once')
-        # large positive scroll to move to top
-        try:
-            pyautogui.scroll(10000)
-        except Exception:
-            # best-effort fallback: small repeated upward scrolls
-            for _ in range(10):
-                pyautogui.scroll(800)
-                time.sleep(0.05)
+        logger.debug('Initial search failed; scrolling to top and retrying')
+        pyautogui.scroll(10000)
         time.sleep(0.6)
-
         for i in range(max_scrolls):
-            try:
-                match = pyautogui.locateOnScreen(
-                    str(icon_path),
-                    confidence=confidence,
-                    grayscale=True
-                )
-
-                if match:
-                    pyautogui.scroll(-200)  # small scroll to adjust for potential header overlap
-                    center_x = match.left + match.width // 2
-                    center_y = match.top + match.height // 2
-
-                    pyautogui.click(center_x, center_y)
-
-                    return {
-                        "found": True,
-                        "x": center_x,
-                        "y": center_y,
-                        "attempt": i,
-                    }
-
-            except Exception:
-                pass
-
+            result = _try_all_icons_at_current_position()
+            if result:
+                result['attempt'] = i
+                return result
             pyautogui.scroll(scroll_amount)
             time.sleep(delay)
     except Exception:
@@ -238,7 +212,7 @@ def find_order_adjustment_block(
 
     return None
 
-def get_tooltip_data(_path=None):
+def get_tooltip_data(_path=None, venture: str = ''):
     """Attempt to extract tooltip text using control, UI-tree inspection, then image/OCR fallback.
 
     Uses the provided crop path (`_path`) for OCR/template matching.
@@ -296,7 +270,7 @@ def get_tooltip_data(_path=None):
     # Run OCR on crop only (prefer crop for OCR; shot is kept for archive)
     try:
         logger.debug('Extracted adjustment mapping from crop: %s', _path)
-        result = extract_adjustment_mapping_from_crop(_path)
+        result = extract_adjustment_mapping_from_crop(_path, venture=venture)
         if result:
             # validate Total Adjustment Amount if present
             try:
@@ -338,7 +312,7 @@ def get_tooltip_data(_path=None):
     return None
 
 
-def extract_adjustment_mapping_from_crop(_path):
+def extract_adjustment_mapping_from_crop(_path, venture: str = ''):
     """Run OCR on `crop_path`, save debug text, and return parsed adjustment mapping or raw OCR text.
 
     Extracted and renamed to better reflect its purpose.
@@ -376,7 +350,7 @@ def extract_adjustment_mapping_from_crop(_path):
                 # try parsing/validating this variant
                 parsed_variant = None
                 try:
-                    parsed_variant = parse_lines_to_map(txt)
+                    parsed_variant = parse_lines_to_map(txt, venture=venture)
                 except Exception:
                     parsed_variant = None
                 if parsed_variant:
@@ -396,7 +370,7 @@ def extract_adjustment_mapping_from_crop(_path):
     # helper: parse text, attach ocr lines, validate totals; return parsed if valid or parsed anyway
     def _try_parse_and_validate(text):
         try:
-            parsed = parse_lines_to_map(text)
+            parsed = parse_lines_to_map(text, venture=venture)
         except Exception as e:
             logger.debug('parse_lines_to_map failed for text variant', exc_info=True)
             try:
@@ -480,7 +454,7 @@ def extract_adjustment_mapping_from_crop(_path):
 
     return primary_parsed
 
-def parse_lines_to_map(text: str):
+def parse_lines_to_map(text: str, venture: str = ''):
     """Parse OCR text lines into a mapping ColumnName -> numeric string.
 
     Uses the simplified `ADJUSTMENT_COLUMNS` (ColumnName -> list of Shopee labels).
@@ -508,6 +482,7 @@ def parse_lines_to_map(text: str):
                 lab_l = lab.lower()
                 if lab_l in label_text:
                     # val = _re.sub(r"\s+", "", numeric or '')
+                    # mapping[cname] = clean_amount(numeric) if venture.upper() == 'VN' else numeric
                     mapping[cname] = clean_amount(numeric)
                     # matched = True
                     break

@@ -63,6 +63,35 @@ def _is_already_logged_in(timeout: float = 1.0) -> bool:
     return False
 
 
+def handle_logout():
+    """Click the logout/profile icon to sign out of the current session."""
+    try:
+        import pyautogui
+    except Exception:
+        logging.warning('pyautogui not available; cannot logout')
+        return False
+    base_icons = Path(__file__).resolve().parents[1] / 'assets' / 'icons'
+    _logout_candidates = ['logout-icon.png', 'logout-v1.9.5-icon.png']
+    for _candidate in _logout_candidates:
+        logout_icon = base_icons / _candidate
+        if not logout_icon.exists():
+            logging.debug('Logout icon not found at %s; skipping', logout_icon)
+            continue
+        try:
+            loc = pyautogui.locateOnScreen(str(logout_icon), confidence=0.8)
+            if loc:
+                pyautogui.click(pyautogui.center(loc))
+                time.sleep(1.0)
+                logging.info('Logged out successfully via %s', _candidate)
+                return True
+            else:
+                logging.debug('%s not visible on screen', _candidate)
+        except Exception as e:
+            logging.warning('Logout attempt with %s failed: %s', _candidate, e)
+    logging.debug('No logout icon found on screen after trying all candidates')
+    return False
+
+
 def find_intrepid_window(timeout=10):
     d = Desktop(backend='uia')
     deadline = time.time() + timeout

@@ -9,6 +9,22 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+# Shopee seller portal TLD per venture
+_VENTURE_TLD = {
+    'VN': 'vn',
+    'PH': 'ph',
+    'SG': 'sg',
+    'MY': 'com.my',
+    'TH': 'co.th',
+    'ID': 'co.id',
+}
+
+
+def _order_portal_url(venture: str) -> str:
+    tld = _VENTURE_TLD.get(venture.upper(), venture.lower())
+    return f'https://seller.shopee.{tld}/portal/sale/order'
+
+
 def handle_open_order_event(event_payload):
     order_id = event_payload.get('order_id')
     if not order_id:
@@ -39,7 +55,7 @@ def handle_open_order_event(event_payload):
                 if brand is not None and not _should_process_brand(brand):
                     logging.debug('Skipping open_order because brand "%s" same as last processed', brand)
                 else:
-                    navigated = _navigate_to_order_portal(edits)
+                    navigated = _navigate_to_order_portal(edits, venture=event_payload.get('venture', 'VN'))
                     if not navigated:
                         logger.debug('navigate_to_order_portal failed')
                         # dismiss any obstructing popup ads that may appear after navigation
@@ -78,18 +94,31 @@ def handle_open_order_event(event_payload):
                     # fallback: image click
                     try:
                         import pyautogui
-                        box_img = Path(__file__).resolve().parents[2] / 'assets' / 'icons' / 'order_id_box.png'
-                        if box_img.exists():
-                            m = pyautogui.locateCenterOnScreen(str(box_img), confidence=0.8)
-
-                            if m:
-                                pyautogui.moveTo(m.x, m.y, duration=0.5)  # di chuyển chậm
-                                time.sleep(0.3)                           # nghỉ nhẹ trước khi click
-                                pyautogui.click()
-                                time.sleep(6)
-                                return True
-                            else:                               
-                                logger.debug('Order ID box image not found on screen')
+                        _icons_dir = Path(__file__).resolve().parents[2] / 'assets' / 'icons'
+                        _box_candidates = ['order_id_box.png', 'order_id_box_label.png', 'order_id_box_2.png']
+                        m = None
+                        for _candidate in _box_candidates:
+                            _img = _icons_dir / _candidate
+                            if not _img.exists():
+                                logger.debug('%s not found, skipping', _candidate)
+                                continue
+                            try:
+                                m = pyautogui.locateCenterOnScreen(str(_img), confidence=0.8)
+                                if m:
+                                    logger.debug('Found order ID box via %s', _candidate)
+                                    break
+                                else:
+                                    logger.debug('%s not found on screen', _candidate)
+                            except Exception as e:
+                                logger.debug('locateCenterOnScreen failed for %s: %s', _candidate, e)
+                        if m:
+                            pyautogui.moveTo(m.x, m.y, duration=0.5)
+                            time.sleep(0.3)
+                            pyautogui.click()
+                            time.sleep(6)
+                            return True
+                        else:
+                            logger.debug('No order ID box image found on screen after trying all candidates')
                     except Exception as e:
                         logger.debug('pyautogui fallback for clicking order ID box failed: %s', e)
                         pass
@@ -116,7 +145,7 @@ def _should_process_brand(brand_name: str) -> bool:
     LAST_PROCESSED_BRAND = brand_name
     return True
 
-def _navigate_to_order_portal(edits) -> bool:
+def _navigate_to_order_portal(edits, venture: str = 'VN') -> bool:
     """Focus an Edit control and navigate to the order portal URL. Returns True on success."""
     try:
         from pywinauto.keyboard import send_keys
@@ -125,7 +154,7 @@ def _navigate_to_order_portal(edits) -> bool:
         # focus address/control and try to set URL directly (preferred for non-standard browsers)
         addr.set_focus()
         time.sleep(3)
-        url = f'https://banhang.shopee.vn/portal/sale/order'
+        url = _order_portal_url(venture)
         try:
             addr.set_text(url)
             time.sleep(0.5)
@@ -135,7 +164,7 @@ def _navigate_to_order_portal(edits) -> bool:
             time.sleep(0.5)
             send_keys(url)
         send_keys('{ENTER}')
-        time.sleep(11.0)
+        time.sleep(16.0)
         return True
     except Exception as e:
         logger.debug('navigate_to_order_portal error: %s', e)
@@ -260,7 +289,7 @@ def _find_and_fill_order_input(edits, order_id: str) -> bool:
                 time.sleep(2)
                 # best-effort: clear the input after submitting
                 try:
-                    pyautogui.click(m.x, m.y)
+                    # pyautogui.click(m.x, m.y)
                     pyautogui.hotkey('ctrl', 'a')
                     pyautogui.press('backspace')
                     time.sleep(0.5)

@@ -2,7 +2,7 @@
 """
 from dotenv import load_dotenv
 from pathlib import Path
-from auth.handler_login import handle_login_event
+from auth.handler_login import handle_login_event, handle_logout
 from brand.handler_search_brand import handle_search_brand_event
 from order.handler_order_flow import handle_order_flow_event
 from gsheets.order_adjustment_sheet import extract_order_index_map, update_columns_for_order
@@ -26,23 +26,26 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
     mapping = extract_order_index_map(sheet_id, sheet_name, output_path=orders_sheet_path)
     logger.info('Found %d orders to process', len(mapping))
 
-    # 2) iterate — sort by Brand Name to group identical brands together
+    # 2) iterate — sort by venture first, then brand to group logins together
     last_venture = None
-    # mapping may be a dict; convert to list of (order_id, meta) and sort by Brand Name
     items = list(mapping.items())
-    def _brand_key(item):
+    def _sort_key(item):
         _, meta = item
+        v = meta.get('Venture') or meta.get('venture') or ''
         b = meta.get('Brand Name') or meta.get('Brand') or ''
-        return str(b).strip().lower()
-    items.sort(key=_brand_key)
+        return (str(v).strip().upper(), str(b).strip().lower())
+    items.sort(key=_sort_key)
     for order_id, meta in items:
         try:
             logger.info('Processing order %s (row %s)', order_id, meta.get('index'))
-            # ensure logged-in session matches the venture for this order
+            # logout and re-login when venture changes
             venture = (meta.get('Venture') or meta.get('venture') or '').strip().upper()
             if venture:
                 if venture != last_venture:
                     try:
+                        if last_venture is not None:
+                            logger.info('Venture changed %s -> %s, logging out', last_venture, venture)
+                            handle_logout()
                         logger.info('Logging in for venture %s', venture)
                         handle_login_event({'venture': venture})
                         last_venture = venture
@@ -58,7 +61,7 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
                         continue
                 except Exception as e:
                     logger.warning('Brand search failed for %s: %s', brand, e)
-            result = handle_order_flow_event({'order_id': order_id, 'brand': brand})
+            result = handle_order_flow_event({'order_id': order_id, 'brand': brand, 'venture': venture})
             # result may include `adjustment_text` as dict from our handler
             updates = {}
             adj = result.get('adjustment_text')
