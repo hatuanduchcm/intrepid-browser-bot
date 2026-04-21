@@ -289,7 +289,7 @@ def _find_and_fill_order_input(edits, order_id: str) -> bool:
                 time.sleep(2)
                 # best-effort: clear the input after submitting
                 try:
-                    # pyautogui.click(m.x, m.y)
+                    pyautogui.click(m.x, m.y)
                     pyautogui.hotkey('ctrl', 'a')
                     pyautogui.press('backspace')
                     time.sleep(0.5)
