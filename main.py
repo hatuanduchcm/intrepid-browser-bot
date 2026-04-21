@@ -38,18 +38,16 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
     for order_id, meta in items:
         try:
             logger.info('Processing order %s (row %s)', order_id, meta.get('index'))
-            # ensure logged-in session matches the Venture/region for this order
-            venture = (meta.get('Venture') or meta.get('venture') or '').strip()
+            # ensure logged-in session matches the venture for this order
+            venture = (meta.get('Venture') or meta.get('venture') or '').strip().upper()
             if venture:
-                # normalize venture to region code accepted by login handler (e.g., 'VN')
-                region = venture.upper()
-                if region != last_venture:
+                if venture != last_venture:
                     try:
-                        logger.info('Logging in for Venture/region %s', region)
-                        handle_login_event({'region': region})
-                        last_venture = region
+                        logger.info('Logging in for venture %s', venture)
+                        handle_login_event({'venture': venture})
+                        last_venture = venture
                     except Exception as e:
-                        logger.warning('Login failed for region %s: %s', region, e)
+                        logger.warning('Login failed for venture %s: %s', venture, e)
             # If brand info available, perform brand search first
             brand = meta.get('Brand Name') or meta.get('Brand')
             if brand:
@@ -104,7 +102,7 @@ load_dotenv(env_path)
 
 def main():
     try:
-        # handle_login_event({'region': 'VN'})
+        # handle_login_event({'venture': 'VN'})
         # Example: run brand search
         # handle_search_brand_event({'brand': 'OATSIDE'})
 
@@ -119,7 +117,7 @@ def main():
             run_batch_process(sheet_id, sheet_name)
         else:
             logging.info('GSHEET_ID or GSHEET_SHEET_NAME not set in environment; skipping batch process and running example flow')
-            # handle_login_event({'region': 'VN'})
+            # handle_login_event({'venture': 'VN'})
             # # Example: run brand search
             # handle_search_brand_event({'brand': 'OATSIDE'})
             # res = handle_order_flow_event({'order_id': '2603264PETUQB4'})

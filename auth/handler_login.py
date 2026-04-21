@@ -11,10 +11,13 @@ from auth.events.handler_enter_password import handle_enter_password
 from auth.events.handler_submit import handle_submit
 
 
-def _env_for_region(region: str):
-    user_key = f'INTREPID_USER_{region.upper()}'
-    user = os.getenv(user_key)
-    pwd = os.getenv(f'INTREPID_PASS_{region.upper()}') or os.getenv('INTREPID_PASS')
+def _env_for_venture(venture: str):
+    venture_upper = venture.upper()
+    user = os.getenv(f'INTREPID_USER_{venture_upper}')
+    if not user:
+        template = os.getenv('INTREPID_USER_TEMPLATE', 'ssc.{venture}@intrepid.asia')
+        user = template.format(venture=venture_upper)
+    pwd = os.getenv(f'INTREPID_PASS_{venture_upper}') or os.getenv('INTREPID_PASS')
     return user, pwd
 
 
@@ -76,7 +79,7 @@ def find_intrepid_window(timeout=10):
     return None
 
 
-def start_and_login(region: str = 'MY', username_val: str = None, password_val: str = None):
+def start_and_login(venture: str = 'MY', username_val: str = None, password_val: str = None):
     # happy-path: attempt to open app, then run per-step handlers sequentially
     launch_via_windows_search('IntrepidBrowser')
 
@@ -107,10 +110,10 @@ def start_and_login(region: str = 'MY', username_val: str = None, password_val: 
 
 
 def handle_login_event(event_payload):
-    region = event_payload.get('region')
-    username_val, password_val = _env_for_region(region)
+    venture = event_payload.get('venture')
+    username_val, password_val = _env_for_venture(venture)
     if not username_val or not password_val:
         raise RuntimeError(
-            f"Missing credentials for region {region}. Set INTREPID_USER_{region} and either INTREPID_PASS_{region} or INTREPID_PASS (shared) in .env"
+            f"Missing credentials for venture {venture}. Set INTREPID_USER_{venture} and either INTREPID_PASS_{venture} or INTREPID_PASS (shared) in .env"
         )
-    return start_and_login(region=region, username_val=username_val, password_val=password_val)
+    return start_and_login(venture=venture, username_val=username_val, password_val=password_val)
