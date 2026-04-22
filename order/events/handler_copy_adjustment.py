@@ -501,7 +501,17 @@ _OCR_LETTER_TO_DIGIT = str.maketrans({
 })
 
 # Currency prefixes that OCR often renders as a single letter
-_CURRENCY_LETTER_PREFIXES = _re.compile(r'^[-+]?\s*[฿B$€£¥₫đdRr]\s*', _re.IGNORECASE)
+_CURRENCY_LETTER_PREFIXES = _re.compile(r'^[-+]?\s*[฿₱B$€£¥₫đdPRr]\s*', _re.IGNORECASE)
+
+# OCR misread normalization: (pattern, replacement) applied before number extraction.
+# Handles Philippine Peso ₱ being read as 'P°', '#', etc.
+_OCR_CURRENCY_NORMALIZE = [
+    (_re.compile(r'P°', _re.IGNORECASE), '₱'),                   # P° → ₱
+    (_re.compile(r"P['\u2018\u2019\u02bc\u0060\u00b4]"), '₱'),   # P' P' P` P´ → ₱
+    (_re.compile(r'(?<![\w])#(?=\d)'), '₱'),                     # # before digit → ₱
+    (_re.compile(r'(?<!\w)P(?=[-\d])'), '₱'),                    # bare P before digit/minus → ₱ (e.g. P35.00, P-57.00)
+    (_re.compile(r'[-+]?₱-(?=\d)'), lambda m: '-₱'),             # collapse double-sign: -₱- or ₱- → -₱
+]
 
 
 def _try_ocr_currency_token(token: str):
@@ -534,7 +544,11 @@ def _try_ocr_currency_token(token: str):
 def split_text_and_number(line: str):
     if not line:
         return "", ""
-    
+
+    # Normalize OCR-confused currency symbols before any parsing
+    for _norm_pat, _norm_rep in _OCR_CURRENCY_NORMALIZE:
+        line = _norm_pat.sub(_norm_rep, line)
+
     # Remove special | character that may interfere with OCR parsing, replacing it with a space to preserve word boundaries
     line = line.replace('|', '')
 

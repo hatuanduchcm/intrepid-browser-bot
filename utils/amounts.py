@@ -8,6 +8,9 @@ logger = logging.getLogger(__name__)
 # Ventures where đ/฿ OCR misread heuristic applies (no explicit currency prefix in output)
 _HEURISTIC_VENTURES = {'VN', 'TH'}
 
+# Ventures where '.' is the decimal separator (store as peso.cents, not integer centavos)
+_DECIMAL_VENTURES = {'PH'}
+
 # Known multi-character currency prefixes (longest first, case-sensitive)
 _MULTI_PREFIXES = ('RM', 'Rp', 'S$')
 
@@ -17,6 +20,9 @@ def clean_amount(amount: Optional[str], venture: str = '') -> Optional[str]:
 
     Mode 1 — explicit prefix found (RM/Rp/S$/đ/d/…):
       Strip it, keep ALL remaining digits as-is.
+
+    Mode 1b — decimal venture (PH): '.' is decimal separator.
+      Strip prefix, keep digits + single decimal point.
 
     Mode 2 — no prefix AND venture in VN/TH:
       Apply OCR-misread heuristic: drop leading '4' or '9' when format
@@ -55,6 +61,12 @@ def clean_amount(amount: Optional[str], venture: str = '') -> Optional[str]:
 
         if not digits:
             return sign + digits
+
+        # --- Mode 1b: decimal venture (PH) — '.' is decimal separator, preserve it ---
+        if venture.upper() in _DECIMAL_VENTURES:
+            # strip thousand separators (commas), keep decimal point
+            decimal_str = digits_and_sep.replace(',', '')
+            return sign + decimal_str if decimal_str else sign + digits
 
         if has_prefix:
             return sign + digits

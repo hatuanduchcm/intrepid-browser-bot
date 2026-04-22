@@ -38,7 +38,7 @@ def handle_order_flow_event(event_payload):
     #     return result
 
     try:
-        txt = handle_copy_adjustment_event({})
+        txt = handle_copy_adjustment_event({'venture': event_payload.get('venture', '')})
         result['adjustment_text'] = txt
     except Exception as e:
         logger.debug('copy_adjustment failed: %s', e)
