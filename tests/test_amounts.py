@@ -6,19 +6,14 @@ from utils.amounts import clean_amount
 def test_clean_amount_explicit_prefix():
     """Explicit currency prefix: strip and keep all digits."""
     # single-char
-    assert clean_amount('$116.926') == '116926'
-    assert clean_amount('d7.520') == '7520'
-    assert clean_amount('đ314.342') == '314342'
-    assert clean_amount('đ20.292') == '20292'
-    assert clean_amount('-đ40.000') == '-40000'
-    assert clean_amount('-d2.480.600') == '-2480600'
-    assert clean_amount('-1499.000') == '-499000'
+    assert clean_amount('$116.926', venture='VN') == '116926'
+    assert clean_amount('d7.520', venture='VN') == '7520'
+    assert clean_amount('đ314.342', venture='VN') == '314342'
+    assert clean_amount('đ20.292', venture='VN') == '20292'
+    assert clean_amount('-đ40.000', venture='VN') == '-40000'
+    assert clean_amount('-d2.480.600', venture='VN') == '-2480600'
     assert clean_amount('฿116.926', venture='TH') == '116926'
-    assert clean_amount('฿7.520', venture='TH') == '7520'
-    assert clean_amount('฿314.342', venture='TH') == '314342'
-    assert clean_amount('฿20.292', venture='TH') == '20292'
     assert clean_amount('-฿40.000', venture='TH') == '-40000'
-    assert clean_amount('-฿2.480.600', venture='TH') == '-2480600'
     # MY: RM prefix
     assert clean_amount('RM75.65', venture='MY') == '7565'
     assert clean_amount('-RM75.65', venture='MY') == '-7565'
@@ -34,31 +29,35 @@ def test_clean_amount_explicit_prefix():
 
 
 def test_clean_amount_vn_heuristic():
-    """VN/TH: OCR misread of đ as '4', '9', or '1' — drop when format matches."""
-    # hundreds of thousands (4/9)
+    """VN/TH: đ misread as ANY digit — drop when format matches."""
+    # misread as 4
     assert clean_amount('4314.342', venture='VN') == '314342'
     assert clean_amount('453.000', venture='VN') == '53000'
+    assert clean_amount('419.600', venture='VN') == '19600'
+    # misread as 9
     assert clean_amount('949.218', venture='VN') == '49218'
     assert clean_amount('915.536', venture='VN') == '15536'
-    assert clean_amount('419.600', venture='VN') == '19600'
-    # multi-million (4/9)
-    assert clean_amount('41.889.200', venture='VN') == '1889200'
-    assert clean_amount('41.452.884', venture='VN') == '1452884'
-    assert clean_amount('42.480.600', venture='VN') == '2480600'
-    # hundreds of thousands (1 = đ misread)
+    # misread as 1
     assert clean_amount('1499.000', venture='VN') == '499000'
     assert clean_amount('1388.400', venture='VN') == '388400'
     assert clean_amount('-1499.000', venture='VN') == '-499000'
-    # '1' NOT dropped for multi-million (legitimate value)
-    assert clean_amount('1.452.884', venture='VN') == '1452884'
+    # misread as 3
+    assert clean_amount('3116.926', venture='VN') == '116926'
+    assert clean_amount('389.049', venture='VN') == '89049'
+    # multi-million (any leading digit)
+    assert clean_amount('41.889.200', venture='VN') == '1889200'
+    assert clean_amount('41.452.884', venture='VN') == '1452884'
+    assert clean_amount('42.480.600', venture='VN') == '2480600'
+    assert clean_amount('31.452.884', venture='VN') == '1452884'
     # negative
     assert clean_amount('-4309.617', venture='VN') == '-309617'
     assert clean_amount('-420.700', venture='VN') == '-20700'
     assert clean_amount('-41.889.200', venture='VN') == '-1889200'
-    # genuine amounts starting with 4/9 — single digit before sep → skip drop
+    # genuine — 1 digit before sep: NOT dropped
     assert clean_amount('40.000', venture='VN') == '40000'
     assert clean_amount('-40.000', venture='VN') == '-40000'
     assert clean_amount('-2.480.600', venture='VN') == '-2480600'
+    assert clean_amount('1.452.884', venture='VN') == '1452884'
 
 
 def test_clean_amount_no_venture_no_heuristic():
