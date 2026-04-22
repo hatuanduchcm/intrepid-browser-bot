@@ -21,7 +21,7 @@ DEBUG_DIR.mkdir(parents=True, exist_ok=True)
 
 logger = logging.getLogger(__name__)
 
-def capture_debug_shots(cx: int, cy: int, pad_w: int = 700, pad_h: int = 600):
+def capture_debug_shots(cx: int, cy: int, pad_w: int = 450, pad_h: int = 600):
     """Capture and return crop_path using mss for physical-pixel accuracy (DPI-aware).
 
     Captures the region above the cursor where the adjustment popup appears.
@@ -489,6 +489,48 @@ def parse_lines_to_map(text: str, venture: str = ''):
     return mapping
 
 
+# OCR letter → digit substitution table (for cases like "Bt" = "฿1")
+_OCR_LETTER_TO_DIGIT = str.maketrans({
+    't': '1', 'T': '1',
+    'l': '1', 'I': '1',
+    'O': '0', 'o': '0',
+    'S': '5', 's': '5',
+    'Z': '2', 'z': '2',
+    'G': '6', 'g': '9',
+    'B': '8',
+})
+
+# Currency prefixes that OCR often renders as a single letter
+_CURRENCY_LETTER_PREFIXES = _re.compile(r'^[-+]?\s*[฿B$€£¥₫đdRr]\s*', _re.IGNORECASE)
+
+
+def _try_ocr_currency_token(token: str):
+    """If `token` looks like a currency letter + OCR-confused digits (e.g. 'Bt'),
+    return the corrected numeric string (e.g. 'B1'), else return None.
+
+    Preserves the leading currency letter so clean_amount can strip it.
+    """
+    sign = ''
+    t = token.strip()
+    if t.startswith('-'):
+        sign = '-'
+        t = t[1:].lstrip()
+    # Must start with a known currency-like letter
+    m = _CURRENCY_LETTER_PREFIXES.match(t)
+    if not m:
+        return None
+    currency_part = m.group(0)
+    rest = t[m.end():]
+    if not rest:
+        return None
+    # Apply OCR substitutions on the remainder
+    corrected = rest.translate(_OCR_LETTER_TO_DIGIT)
+    # Accept only if result is all digits (optionally with separators)
+    if _re.fullmatch(r'[\d\.,]+', corrected):
+        return sign + currency_part + corrected
+    return None
+
+
 def split_text_and_number(line: str):
     if not line:
         return "", ""
@@ -497,11 +539,10 @@ def split_text_and_number(line: str):
     line = line.replace('|', '')
 
     # match number-like block (keep raw format including $, ₫, -, ., etc.)
-    # allow an optional single currency-like char or single letter immediately
-    # before the digit sequence; also accept an optional sign and separators (., and spaces)
-    # This lets OCR outputs like 'd9 329' be captured as a single match which
-    # we then collapse to 'd9329'. Exclude '|' from the prefix group.
-    num_pattern = r"(?:(?<=^)|(?<=\s))[-+]?\s*(?:[^\w\s\|]|\w)?\s*\d[\d\.,\s]*"
+    # Supports multi-char currency prefixes (Rp, RM, S$) as well as single-char
+    # prefixes (฿, đ, d, ...) immediately before the digit sequence.
+    # Also handles OCR spacing like 'd9 329' → collapsed to 'd9329'.
+    num_pattern = r"(?:(?<=^)|(?<=\s))[-+]?\s*(?:Rp|RM|S\$|[^\w\s\|]|\w)?\s*\d[\d\.,\s]*"
 
     nums = _re.findall(num_pattern, line)
 
@@ -510,6 +551,16 @@ def split_text_and_number(line: str):
 
     # remove number block from text
     text_only = _re.sub(num_pattern, " ", line)
+
+    # Fallback: primary regex missed because OCR confused digits with letters (e.g. "Bt" = "฿1").
+    # Scan remaining words in text_only for a currency-prefixed OCR-confused token.
+    if not num:
+        for word in _re.split(r'\s+', line.strip()):
+            corrected = _try_ocr_currency_token(word)
+            if corrected:
+                num = corrected
+                text_only = line.replace(word, ' ')
+                break
 
     # normalize whitespace only
     text_only = text_only.strip().lower()

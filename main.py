@@ -38,6 +38,15 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
     for order_id, meta in items:
         try:
             logger.info('Processing order %s (row %s)', order_id, meta.get('index'))
+            # skip if Total check == 0
+            total_check_raw = meta.get('Total check', '')
+            try:
+                total_check_val = float(str(total_check_raw).replace(',', '.').strip()) if total_check_raw else None
+            except Exception:
+                total_check_val = None
+            if total_check_val is not None and total_check_val == 0:
+                logger.info('Skipping order %s: Total check = 0', order_id)
+                continue
             # logout and re-login when venture changes
             venture = (meta.get('Venture') or meta.get('venture') or '').strip().upper()
             if venture:

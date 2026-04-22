@@ -32,8 +32,13 @@ class ColumnName(Enum):
     REVERSE_SHIPPING_FEE_SST = 'REVERSE_SHIPPING_FEE_SST'
     COMMISSION_FEE = 'COMMISSION_FEE'
     TRANSACTION_FEE = 'TRANSACTION_FEE'
+    PLATFORM_INFRASTRUCTURE_FEE = 'PLATFORM_INFRASTRUCTURE_FEE'
+    SAVER_PROGRAM_SHIPPING_FEE_SAVINGS = 'SAVER_PROGRAM_SHIPPING_FEE_SAVINGS'
     SERVICE_FEE = 'SERVICE_FEE'
     AMS_COMMISSION_FEE = 'AMS_COMMISSION_FEE'
+    SELLER_ORDER_PROCESSING_FEE = 'SELLER_ORDER_PROCESSING_FEE'
+    BUYER_PAID_SHIPPING_FEE = 'BUYER_PAID_SHIPPING_FEE'
+    WITHHOLDING_TAX = 'WITHHOLDING_TAX'
     VOUCHER_SPONSORED_BY_SELLER = 'VOUCHER_SPONSORED_BY_SELLER'
     PRODUCT_DISCOUNT_REBATE_FROM_SHOPEE = 'PRODUCT_DISCOUNT_REBATE_FROM_SHOPEE'
     PROMO_CODE_PAID_BY_SELLER = 'PROMO_CODE_PAID_BY_SELLER'
@@ -58,8 +63,13 @@ ADJUSTMENT_COLUMNS = {
     ColumnName.REVERSE_SHIPPING_FEE: ["Reverse Shipping Fee"],
     ColumnName.COMMISSION_FEE: ["Commission Fee"],
     ColumnName.TRANSACTION_FEE: ["Transaction Fee"],
+    ColumnName.PLATFORM_INFRASTRUCTURE_FEE: ["Platform Infrastructure Fee"],
+    ColumnName.SAVER_PROGRAM_SHIPPING_FEE_SAVINGS: ["Saver Program Shipping Fee Savings", "Saver Program Shipping Fee"],
     ColumnName.SERVICE_FEE: ["Service Fee"],
     ColumnName.AMS_COMMISSION_FEE: ["AMS Commission Fee"],
+    ColumnName.SELLER_ORDER_PROCESSING_FEE: ["Seller Order Processing Fee"],
+    ColumnName.BUYER_PAID_SHIPPING_FEE: ["Buyer Paid Shipping Fee"],
+    ColumnName.WITHHOLDING_TAX: ["Withholding Tax"],
     ColumnName.COFUND_VOUCHER_SPONSORED_BY_SELLER: ["Cofund Voucher Sponsored by Seller", "Cofund Voucher Sponsored by", "Cofund Voucher Sponsored"],
     ColumnName.VOUCHER_SPONSORED_BY_SELLER: ["Voucher Sponsored by Seller"],
     ColumnName.PRODUCT_DISCOUNT_REBATE_FROM_SHOPEE: ["Product Discount Rebate from Shopee", "Product Discount Rebate from", "Product Discount Rebate"],
@@ -82,8 +92,13 @@ GSHEET_COLUMN = {
     ColumnName.REVERSE_SHIPPING_FEE_SST: "Reverse Shipping Fee SST",
     ColumnName.COMMISSION_FEE: "Commission Fee",
     ColumnName.TRANSACTION_FEE: "Transaction Fee",
+    ColumnName.PLATFORM_INFRASTRUCTURE_FEE: "Platform Infrastructure Fee",
+    ColumnName.SAVER_PROGRAM_SHIPPING_FEE_SAVINGS: "Saver Program Shipping Fee Savings",
     ColumnName.SERVICE_FEE: "Service Fee",
     ColumnName.AMS_COMMISSION_FEE: "AMS Commission Fee",
+    ColumnName.SELLER_ORDER_PROCESSING_FEE: "Seller Order Processing Fee",
+    ColumnName.BUYER_PAID_SHIPPING_FEE: "Buyer Paid Shipping Fee",
+    ColumnName.WITHHOLDING_TAX: "Withholding Tax",
     ColumnName.VOUCHER_SPONSORED_BY_SELLER: "Voucher Sponsored by Seller",
     ColumnName.PRODUCT_DISCOUNT_REBATE_FROM_SHOPEE: "Product Discount Rebate from Shopee",
     ColumnName.PROMO_CODE_PAID_BY_SELLER: "Promo Code Paid By Seller",
@@ -182,7 +197,9 @@ def update_columns_for_order(sheet_id: str, sheet_name: str, order_id: str, upda
 
     # Read header row
     header = worksheet.row_values(1)
-    header_map = {h: i + 1 for i, h in enumerate(header)}  # name -> col number (1-based)
+    # case-insensitive map: lowercase key -> col number; keep original for a1 lookup
+    header_map_lower = {h.strip().lower(): i + 1 for i, h in enumerate(header)}
+    header_map = {h: i + 1 for i, h in enumerate(header)}  # original-case map (for logging)
 
     # Validate requested columns exist
     # Ensure we push all known GSHEET columns on every update (not only those with values)
@@ -193,7 +210,7 @@ def update_columns_for_order(sheet_id: str, sheet_name: str, order_id: str, upda
     except Exception:
         pass
 
-    missing = [c for c in updates.keys() if c not in header_map]
+    missing = [c for c in updates.keys() if c.strip().lower() not in header_map_lower]
     if missing:
         logger.warning('Requested update columns missing in sheet: %s', missing)
 
@@ -222,9 +239,9 @@ def update_columns_for_order(sheet_id: str, sheet_name: str, order_id: str, upda
     # ensure ranges include worksheet title so spreadsheet batch update targets correct sheet
     ws_title = getattr(worksheet, 'title', None)
     for col_name, value in updates.items():
-        if col_name not in header_map:
+        if col_name.strip().lower() not in header_map_lower:
             continue
-        col_num = header_map[col_name]
+        col_num = header_map_lower[col_name.strip().lower()]
         a1 = gspread.utils.rowcol_to_a1(row_number, col_num)
         full_range = f"{ws_title}!{a1}" if ws_title else a1
         cell_updates.append({
@@ -277,6 +294,7 @@ def extract_order_index_map(sheet_id: str, sheet_name: str, output_path: str = N
     brand_col = find_col(['Platform'])
     platform_col = find_col(['Platform'])
     order_col = find_col(['Order ID', 'OrderID', 'Order'])
+    total_check_col = find_col(['Total check', 'Total Check', 'TotalCheck'])
 
     if not order_col:
         raise RuntimeError('Could not find Order ID column in header')
@@ -305,6 +323,10 @@ def extract_order_index_map(sheet_id: str, sheet_name: str, output_path: str = N
                 entry['Platform'] = row[platform_col - 1].strip()
             else:
                 entry['Platform'] = ''
+            if total_check_col and len(row) >= total_check_col:
+                entry['Total check'] = row[total_check_col - 1].strip()
+            else:
+                entry['Total check'] = ''
             data_map[order_id] = entry
         except Exception:
             continue
