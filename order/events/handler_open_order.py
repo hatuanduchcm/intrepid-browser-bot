@@ -103,14 +103,14 @@ def handle_open_order_event(event_payload):
                                 logger.debug('%s not found, skipping', _candidate)
                                 continue
                             try:
-                                m = pyautogui.locateCenterOnScreen(str(_img), confidence=0.8)
+                                m = pyautogui.locateCenterOnScreen(str(_img), confidence=0.7)
                                 if m:
                                     logger.debug('Found order ID box via %s', _candidate)
                                     break
                                 else:
                                     logger.debug('%s not found on screen', _candidate)
                             except Exception as e:
-                                logger.debug('locateCenterOnScreen failed for %s: %s', _candidate, e)
+                                logger.debug('Error locating order ID box %s on screen: %s', _candidate, e)
                         if m:
                             pyautogui.moveTo(m.x, m.y, duration=0.5)
                             time.sleep(0.3)

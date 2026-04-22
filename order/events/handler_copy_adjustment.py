@@ -21,32 +21,38 @@ DEBUG_DIR.mkdir(parents=True, exist_ok=True)
 
 logger = logging.getLogger(__name__)
 
-def capture_debug_shots(cx: int, cy: int, pad_w: int = 700, pad_h: int = 1200):
-    """Capture and return crop_path.
+def capture_debug_shots(cx: int, cy: int, pad_w: int = 700, pad_h: int = 600):
+    """Capture and return crop_path using mss for physical-pixel accuracy (DPI-aware).
 
-    We no longer save a full-shot; return crop_path.
+    Captures the region above the cursor where the adjustment popup appears.
     """
     crop_path = None
     try:
-        # crop region around cursor (shifted where tooltips commonly appear)
         try:
             screen_w, screen_h = pyautogui.size()
             x1 = int(max(0, cx - pad_w // 2))
-            # use shifted vertical region so popup is included
-            shift_y = int(min(screen_h - 1, cy + 40))
-            y2 = int(max(0, shift_y - pad_h // 2))
             w_region = int(min(pad_w, screen_w - x1))
-            h_region2 = int(min(pad_h, screen_h - y2))
+            # popup appears ABOVE the cursor — capture upward from cursor position
+            y2 = int(max(0, cy - pad_h))
+            h_region2 = int(min(pad_h, cy))
             crop_path = DEBUG_DIR / f'popup_crop_{int(time.time())}.png'
-            region = pyautogui.screenshot(region=(x1, y2, w_region, h_region2))
-            region.save(str(crop_path))
+            try:
+                import mss
+                import mss.tools
+                with mss.mss() as sct:
+                    monitor = {'left': x1, 'top': y2, 'width': w_region, 'height': h_region2}
+                    shot = sct.grab(monitor)
+                    mss.tools.to_png(shot.rgb, shot.size, output=str(crop_path))
+            except Exception:
+                logging.debug('mss capture failed, falling back to pyautogui')
+                region = pyautogui.screenshot(region=(x1, y2, w_region, h_region2))
+                region.save(str(crop_path))
         except Exception:
             logging.debug('Crop capture failed')
             crop_path = None
     except Exception as e:
         logging.debug('screenshot capture failed: %s', e)
 
-    # We do not keep a full-shot file; return crop_path
     return crop_path
 
 
@@ -245,20 +251,20 @@ def get_tooltip_data(_path=None, venture: str = ''):
 
     # 3) OCR/template fallback using provided images
     # prefer pytesseract + PIL, but fall back to easyocr if available
-    try:
-        import pytesseract
-        pytesseract.pytesseract.tesseract_cmd = r"C:\Users\hang.truong\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
-        from PIL import Image
-        easyocr_reader = None
-    except Exception:
-        logger.debug('pytesseract or PIL not available, trying easyocr')
-        pytesseract = None
-        try:
-            import easyocr
-            easyocr_reader = easyocr.Reader(['en'])
-        except Exception:
-            logger.debug('easyocr not available')
-            easyocr_reader = None
+    # try:
+    #     import pytesseract
+    #     pytesseract.pytesseract.tesseract_cmd = r"C:\Users\hang.truong\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
+    #     from PIL import Image
+    #     easyocr_reader = None
+    # except Exception:
+    #     logger.debug('pytesseract or PIL not available, trying easyocr')
+    #     pytesseract = None
+    #     try:
+    #         import easyocr
+    #         easyocr_reader = easyocr.Reader(['en'])
+    #     except Exception:
+    #         logger.debug('easyocr not available')
+    #         easyocr_reader = None
 
     # use shared OCR helper from utils
     try:
@@ -272,13 +278,8 @@ def get_tooltip_data(_path=None, venture: str = ''):
         logger.debug('Extracted adjustment mapping from crop: %s', _path)
         result = extract_adjustment_mapping_from_crop(_path, venture=venture)
         if result:
-            # validate Total Adjustment Amount if present
-            try:
-                check = validate_total_adjustment(result)
-                if check is not None:
-                    result['__total_check__'] = check
-            except Exception:
-                logger.debug('Total validation failed', exc_info=True)
+            # __total_check__ is already attached by extract_adjustment_mapping_from_crop
+            check = result.get('__total_check__') if isinstance(result, dict) else None
 
             # persist only on validation failure to reduce debug clutter
             try:
@@ -367,7 +368,10 @@ def extract_adjustment_mapping_from_crop(_path, venture: str = ''):
 
         return None
 
-    # helper: parse text, attach ocr lines, validate totals; return parsed if valid or parsed anyway
+    # best-effort fallback: first parsed result even if validation failed
+    _best_effort = [None]
+
+    # helper: parse text, attach ocr lines, validate totals; return parsed ONLY if matched
     def _try_parse_and_validate(text):
         try:
             parsed = parse_lines_to_map(text, venture=venture)
@@ -387,25 +391,24 @@ def extract_adjustment_mapping_from_crop(_path, venture: str = ''):
         except Exception:
             logger.debug('Failed to attach OCR lines to parsed mapping')
 
-        # validate totals; if matches True return parsed
+        # validate totals; return parsed only when matched
         try:
             check = validate_total_adjustment(parsed)
+            if isinstance(parsed, dict):
+                parsed['__total_check__'] = check
             if isinstance(check, dict) and check.get('matches'):
                 return parsed
         except Exception:
             logger.debug('validate_total_adjustment raised for parsed mapping', exc_info=True)
 
-        return parsed
+        # no match: save as best-effort fallback, signal caller to try next variant
+        if _best_effort[0] is None:
+            _best_effort[0] = parsed
+        return None
 
     # try primary parsed result first
     primary_parsed = _try_parse_and_validate(crop_ocr)
     if primary_parsed:
-        try:
-            chk = validate_total_adjustment(primary_parsed)
-            if isinstance(primary_parsed, dict):
-                primary_parsed['__total_check__'] = chk
-        except Exception:
-            logger.debug('Failed to attach total check to primary_parsed', exc_info=True)
         return primary_parsed
 
     # if validation failed, attempt alternate OCR scales
@@ -427,32 +430,19 @@ def extract_adjustment_mapping_from_crop(_path, venture: str = ''):
             parsed_variant = _try_parse_and_validate(txt)
             if parsed_variant:
                 try:
-                    chk = validate_total_adjustment(parsed_variant)
-                    if isinstance(parsed_variant, dict):
-                        parsed_variant['__total_check__'] = chk
-                except Exception:
-                    logger.debug('Failed to attach total check to parsed_variant', exc_info=True)
-                try:
                     (DEBUG_DIR / 'ocr_text.txt').write_text('\n\n'.join(f"[{k}]\n{v}" for k, v in ocr_log if v))
                 except Exception:
                     logger.debug('Failed to write ocr_text.txt')
                 return parsed_variant
 
-    # persist OCR log for inspection and return the best-effort parsed mapping (may be None)
+    # persist OCR log for inspection
     try:
         (DEBUG_DIR / 'ocr_text.txt').write_text('\n\n'.join(f"[{k}]\n{v}" for k, v in ocr_log if v))
     except Exception:
         logger.debug('Failed to write ocr_text.txt')
 
-    # attach validation result to primary_parsed before returning
-    try:
-        if primary_parsed and isinstance(primary_parsed, dict):
-            chk = validate_total_adjustment(primary_parsed)
-            primary_parsed['__total_check__'] = chk
-    except Exception:
-        logger.debug('Failed to attach total check to primary_parsed at end', exc_info=True)
-
-    return primary_parsed
+    # return best-effort fallback (validation + __total_check__ already attached)
+    return _best_effort[0]
 
 def parse_lines_to_map(text: str, venture: str = ''):
     """Parse OCR text lines into a mapping ColumnName -> numeric string.
@@ -482,8 +472,7 @@ def parse_lines_to_map(text: str, venture: str = ''):
                 lab_l = lab.lower()
                 if lab_l in label_text:
                     # val = _re.sub(r"\s+", "", numeric or '')
-                    # mapping[cname] = clean_amount(numeric) if venture.upper() == 'VN' else numeric
-                    mapping[cname] = clean_amount(numeric)
+                    mapping[cname] = clean_amount(numeric, venture=venture)
                     # matched = True
                     break
             # if matched:
@@ -617,7 +606,7 @@ def validate_total_adjustment(parsed: dict):
         try:
             record = {
                 'ts': int(time.time()),
-                'raw_parsed': {str(k): v for k, v in parsed.items()},
+                'ocr_lines': parsed.get('__ocr_lines__', []) if isinstance(parsed, dict) else [],
                 'converted_map': converted_map,
                 'expected_sum': int(total_val_int),
                 'total_value': int(sum_others_int),

@@ -62,7 +62,7 @@ ADJUSTMENT_COLUMNS = {
     ColumnName.AMS_COMMISSION_FEE: ["AMS Commission Fee"],
     ColumnName.COFUND_VOUCHER_SPONSORED_BY_SELLER: ["Cofund Voucher Sponsored by Seller", "Cofund Voucher Sponsored by", "Cofund Voucher Sponsored"],
     ColumnName.VOUCHER_SPONSORED_BY_SELLER: ["Voucher Sponsored by Seller"],
-    ColumnName.PRODUCT_DISCOUNT_REBATE_FROM_SHOPEE: ["Product Discount Rebate from Shopee"],
+    ColumnName.PRODUCT_DISCOUNT_REBATE_FROM_SHOPEE: ["Product Discount Rebate from Shopee", "Product Discount Rebate from", "Product Discount Rebate"],
     ColumnName.PROMO_CODE_PAID_BY_SELLER: ["Promo Code Paid By Seller"],
     ColumnName.ORIGINAL_PRODUCT_PRICE: ["Original product price"],
     ColumnName.GAP: ["Gap"],
