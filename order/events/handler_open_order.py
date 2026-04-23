@@ -73,57 +73,35 @@ def handle_open_order_event(event_payload):
 
                 # after search results appear, click the 'Order ID' label/box to open details
                 try:
-                #     # look for a control with text containing 'Order ID' and click its parent center
-                #     for c in wr.descendants():
-                #         try:
-                #             if 'order id' in (c.window_text() or '').lower():
-                #                 try:
-                #                     rc = c.rectangle()
-                #                     cx = (rc.left + rc.right) // 2
-                #                     cy = (rc.top + rc.bottom) // 2
-                #                     c.click_input(coords=(cx - rc.left, cy - rc.top))
-                #                     return True
-                #                 except Exception:
-                #                     try:
-                #                         c.click_input()
-                #                         return True
-                #                     except Exception:
-                #                         continue
-                #         except Exception:
-                #             continue
-                    # fallback: image click
-                    try:
-                        import pyautogui
-                        _icons_dir = Path(__file__).resolve().parents[2] / 'assets' / 'icons'
-                        _box_candidates = ['order_id_box.png', 'order_id_box_label.png', 'order_id_box_2.png']
-                        m = None
-                        for _candidate in _box_candidates:
-                            _img = _icons_dir / _candidate
-                            if not _img.exists():
-                                logger.debug('%s not found, skipping', _candidate)
-                                continue
-                            try:
-                                m = pyautogui.locateCenterOnScreen(str(_img), confidence=0.7)
-                                if m:
-                                    logger.debug('Found order ID box via %s', _candidate)
-                                    break
-                                else:
-                                    logger.debug('%s not found on screen', _candidate)
-                            except Exception as e:
-                                logger.debug('Error locating order ID box %s on screen: %s', _candidate, e)
-                        if m:
-                            pyautogui.moveTo(m.x, m.y, duration=0.5)
-                            time.sleep(0.3)
-                            pyautogui.click()
-                            time.sleep(6)
-                            return True
-                        else:
-                            logger.debug('No order ID box image found on screen after trying all candidates')
-                    except Exception as e:
-                        logger.debug('pyautogui fallback for clicking order ID box failed: %s', e)
-                        pass
+                    import pyautogui
+                    _icons_dir = Path(__file__).resolve().parents[2] / 'assets' / 'icons'
+                    _box_candidates = ['order_id_box.png', 'order_id_box_label.png', 'order_id_box_2.png']
+                    m = None
+                    for _candidate in _box_candidates:
+                        _img = _icons_dir / _candidate
+                        if not _img.exists():
+                            logger.debug('%s not found, skipping', _candidate)
+                            continue
+                        try:
+                            m = pyautogui.locateCenterOnScreen(str(_img), confidence=0.7)
+                            if m:
+                                logger.debug('Found order ID box via %s', _candidate)
+                                break
+                            else:
+                                logger.debug('%s not found on screen', _candidate)
+                        except Exception as e:
+                            logger.debug('Error locating order ID box %s on screen: %s', _candidate, e)
+                    if m:
+                        pyautogui.moveTo(m.x, m.y, duration=0.5)
+                        time.sleep(0.3)
+                        pyautogui.click()
+                        time.sleep(6)
+                        return True
+                    else:
+                        logger.debug('No order ID box image found on screen after trying all candidates')
                 except Exception as e:
-                    logger.debug('click order id box failed: %s', e)
+                    logger.debug('pyautogui fallback for clicking order ID box failed: %s', e)
+                    pass
             except Exception as e:
                 logger.debug('open_order navigation failed: %s', e)
         return False
@@ -219,61 +197,11 @@ def _dismiss_popups(max_attempts: int = 2, icon_name: str = 'close-popup.png', c
 
     logger.debug('dismiss_popups reached max attempts (%d) and stopped', max_attempts)
 
-
-def _type_order_id_into_control(input_control, order_id: str) -> bool:
-    """Type the order_id into a pywinauto control, returning True on success."""
-    try:
-        input_control.set_focus()
-        time.sleep(0.1)
-        # clear any existing text first
-        try:
-            input_control.set_text('')
-        except Exception:
-            send_keys('^a{BACKSPACE}')
-        time.sleep(0.05)
-        try:
-            input_control.set_text(str(order_id))
-        except Exception:
-            send_keys(str(order_id))
-        send_keys('{ENTER}')
-        time.sleep(3.0)
-        # clear the input after submitting to leave a clean state
-        try:
-            input_control.set_focus()
-            time.sleep(0.05)
-            try:
-                input_control.set_text('')
-            except Exception:
-                send_keys('^a{BACKSPACE}')
-        except Exception:
-            # best-effort; ignore failures
-            pass
-        return True
-    except Exception as e:
-        logger.debug('failed to type into input_control: %s', e)
-        return False
-
-
 def _find_and_fill_order_input(edits, order_id: str) -> bool:
     """Locate an order-id input either via Edit controls or image fallback and fill it.
 
     Returns True if input was filled and Enter was sent.
     """
-    # # try to find an Edit control and use it
-    # try:
-    #     for c in edits:
-    #         try:
-    #             name = c.friendly_class_name()
-    #         except Exception:
-    #             continue
-    #         try:
-    #             if name and name.lower().startswith('edit'):
-    #                 if _type_order_id_into_control(c, order_id):
-    #                     return True
-    #         except Exception:
-    #             continue
-    # except Exception as e:
-    #     logger.debug('error scanning edits for input control: %s', e)
 
     # fallback: use pyautogui image locate if available
     try:
