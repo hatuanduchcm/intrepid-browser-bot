@@ -12,25 +12,6 @@ def enter_brand_in_search_box(event_payload):
         if not w:
             raise RuntimeError('Intrepid window not found')
 
-        # Primary: try control-based lookup
-        # try:
-        #     item = w.child_window(title_re=f'.*{query}.*', control_type='Text')
-        #     if item and item.exists():
-        #         try:
-        #             parent = item.parent()
-        #             parent.click_input()
-        #         except Exception:
-        #             item.click_input()
-        #         time.sleep(0.3)
-        #         # type the query into the focused search box (best-effort)
-        #         pyautogui.write(query, interval=0.02)
-        #         pyautogui.press('enter')
-        #         _click_brand_icon()
-        #         time.sleep(0.2)
-        #         return True
-        # except Exception:
-        #     logging.debug('Control lookup for select_result failed, falling back to image search')
-
         base_icons = Path(__file__).resolve().parents[2] / 'assets' / 'icons'
         # Try default image first, then a larger-size fallback if available
         img_candidates = [base_icons / 'brand_search_box.png', base_icons / 'brand_search_box_big_size.png']

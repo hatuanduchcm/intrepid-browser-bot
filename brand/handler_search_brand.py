@@ -1,4 +1,4 @@
-from brand.events.search_helpers import click_shopee_shop_icon, shop_not_found_present
+from brand.events.search_helpers import click_shopee_shop_icon, shop_not_found_present, find_and_click_brand_tab, get_brand_search_query, _BRAND_TAB_ICON_MAP
 from utils.window import get_intrepid_window
 from auth.handler_2fa import handle_2fa
 from brand.events.handler_click_search_icon import handle_click_search_icon
@@ -45,17 +45,22 @@ def start_and_search_brand(brand_name: str):
     if not handle_click_search_icon({}):
         raise RuntimeError('Failed to click search icon')
 
-    if not enter_brand_in_search_box({'query': brand_name}):
-        raise RuntimeError('Failed to select brand result for query: "%s"' % brand_name)
-    
+    search_query = get_brand_search_query(brand_name)
+    if not enter_brand_in_search_box({'query': search_query}):
+        raise RuntimeError('Failed to select brand result for query: "%s"' % search_query)
+
     if shop_not_found_present():
         logging.debug('Shop not found message detected after selecting brand "%s"', brand_name)
         # cache negative result to skip future searches for this brand
         LAST_BRAND_STATUS[str(brand_name).strip().lower()] = False
         handle_clean_brand_box({})
         return False
-    
-    if not click_shopee_shop_icon():
+
+    # brands with a dedicated tab icon use find_and_click_brand_tab instead of the generic Shopee icon
+    if brand_name.strip().lower() in _BRAND_TAB_ICON_MAP:
+        if not find_and_click_brand_tab(brand_name):
+            logging.debug('find_and_click_brand_tab failed for "%s", continuing anyway', brand_name)
+    elif not click_shopee_shop_icon():
         logging.debug('Failed to click shopee shop icon after selecting brand, continuing anyway')
 
     # clean the brand search box by clicking the saved search icon coordinates
