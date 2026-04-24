@@ -110,6 +110,24 @@ jobs:
         with:
           name: InvoiceAdjustmentBot
 
+      - name: Init dist repo if empty
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.INTREPID_BROWSER_BOT_DIST_RELEASE_TOKEN }}
+        run: |
+          $repo = "hatuanduchcm/intrepid-browser-bot-dist"
+          $commits = gh api repos/$repo/commits --jq '.[0].sha' 2>&1
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($commits)) {
+            Write-Host "Dist repo is empty — creating initial commit via API"
+            $content = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("# intrepid-browser-bot-dist`n"))
+            gh api repos/$repo/contents/README.md -X PUT `
+              -f message="init" `
+              -f content=$content `
+              -f branch="main"
+          } else {
+            Write-Host "Dist repo already has commits"
+          }
+
       - name: Create GitHub Release (dist repo)
         shell: pwsh
         env:
@@ -117,7 +135,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Continue'
           $tag = "v${{ needs.build.outputs.version }}"
-          $repo = "hatuanduc/intrepid-browser-bot-dist"
+          $repo = "hatuanduchcm/intrepid-browser-bot-dist"
           # Delete existing release+tag if present (idempotent re-run)
           $exists = gh release view $tag --repo $repo 2>&1
           if ($LASTEXITCODE -eq 0) {
