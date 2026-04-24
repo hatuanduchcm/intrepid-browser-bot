@@ -1,4 +1,4 @@
-from brand.events.search_helpers import click_shopee_shop_icon, shop_not_found_present, find_and_click_brand_tab, get_brand_search_query, _BRAND_TAB_ICON_MAP
+from brand.events.search_helpers import click_shopee_shop_icon, shop_not_found_present, find_and_click_brand_tab, get_brand_search_query, _BRAND_TAB_ICON_MAP, wait_for_shop_url
 from utils.window import get_intrepid_window
 from auth.handler_2fa import handle_2fa
 from brand.events.handler_click_search_icon import handle_click_search_icon
@@ -67,19 +67,15 @@ def start_and_search_brand(brand_name: str):
     if not handle_clean_brand_box({}):
         logging.debug('clean brand box failed, continuing')
 
-    # final 2FA check: if OTP prompt appears after selection, try reload/resend
-    from auth.handler_2fa import handle_2fa
-    # skip 2FA helper if this brand was previously verified
+    # final 2FA / URL stability check
+    # skip entirely if this brand was previously verified (known reachable)
     if brand_name and is_brand_verified(brand_name):
-        logging.debug('Brand "%s" previously verified via 2FA; skipping 2FA helper', brand_name)
-    # else:
-    #     if handle_2fa(timeout_seconds=3.0, post_click_delay=1.0, brand=brand_name):
-    #         raise RuntimeError('2FA OTP prompt detected after selecting brand, user may need to enter OTP')
-
-    # mark as processed and record positive result
-    global LAST_PROCESSED_BRAND
-    LAST_PROCESSED_BRAND = brand_name
-    LAST_BRAND_STATUS[str(brand_name).strip().lower()] = True
+        logging.debug('Brand "%s" previously verified; skipping URL wait', brand_name)
+    else:
+        _url_ok = wait_for_shop_url(timeout=15.0, stable_for=2.0)
+        if not _url_ok:
+            logging.warning('Brand "%s": page did not reach a stable shop URL within timeout — skipping order', brand_name)
+            return False
 
     return True
 

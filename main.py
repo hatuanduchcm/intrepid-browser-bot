@@ -12,7 +12,7 @@ from brand.handler_search_brand import handle_search_brand_event
 logger = logging.getLogger(__name__)
 
 
-def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = None):
+def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = None, stats_queue=None):
     """Orchestrate batch processing:
 
     1. Extract order index map from the given sheet (order -> row/index and metadata).Browser
@@ -23,6 +23,28 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
     `sheet_id` and `sheet_name` identify the Google Sheet to read/write.
     """
     # 1) extract mapping
+    _debug_dir = Path(__file__).parent / 'assets' / 'debug_matches'
+
+    def _stat(event: str, **kw):
+        if stats_queue is not None:
+            try:
+                stats_queue.put_nowait({'type': 'stat', 'event': event, **kw})
+            except Exception:
+                pass
+
+    def _screenshot_error(order_id: str, venture: str, reason: str) -> str | None:
+        """Take a full-screen screenshot, save to debug_matches, return path."""
+        try:
+            import pyautogui
+            safe_reason = reason[:40].replace(' ', '_').replace('/', '-') if reason else 'error'
+            shot_path = _debug_dir / f'error_{venture}_{order_id}_{safe_reason}.png'
+            pyautogui.screenshot(str(shot_path))
+            logger.debug('[%s] Error screenshot saved: %s', order_id, shot_path)
+            return str(shot_path)
+        except Exception as e:
+            logger.debug('[%s] Failed to capture error screenshot: %s', order_id, e)
+            return None
+
     mapping = extract_order_index_map(sheet_id, sheet_name, output_path=orders_sheet_path)
     logger.info('Found %d orders to process', len(mapping))
 
@@ -36,69 +58,142 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
         return (str(v).strip().upper(), str(b).strip().lower())
     items.sort(key=_sort_key)
     for order_id, meta in items:
+        venture = ''  # ensure defined in except block
         try:
-            logger.info('Processing order %s (row %s)', order_id, meta.get('index'))
-            # skip if Total check == 0
+            logger.info('─' * 60)
+            logger.info('[%s] Start — row %s', order_id, meta.get('index'))
+
+            # ── Skip if Total check == 0 ──────────────────────────────────
             total_check_raw = meta.get('Total check', '')
             try:
                 total_check_val = float(str(total_check_raw).replace(',', '.').strip()) if total_check_raw else None
             except Exception:
                 total_check_val = None
             if total_check_val is not None and total_check_val == 0:
-                logger.info('Skipping order %s: Total check = 0', order_id)
+                logger.info('[%s] SKIP — Total check = 0', order_id)
+                _stat('skip', order_id=order_id,
+                      venture=(meta.get('Venture') or meta.get('venture') or '').strip().upper())
                 continue
-            # logout and re-login when venture changes
+
             venture = (meta.get('Venture') or meta.get('venture') or '').strip().upper()
-            if venture:
-                if venture != last_venture:
-                    try:
-                        if last_venture is not None:
-                            logger.info('Venture changed %s -> %s, logging out', last_venture, venture)
-                            handle_logout()
-                        logger.info('Logging in for venture %s', venture)
-                        handle_login_event({'venture': venture})
-                        last_venture = venture
-                    except Exception as e:
-                        logger.warning('Login failed for venture %s: %s', venture, e)
-            # If brand info available, perform brand search first
+            logger.info('[%s] Venture: %s', order_id, venture)
+
+            # ── Login / re-login ──────────────────────────────────────────
+            if venture and venture != last_venture:
+                try:
+                    if last_venture is not None:
+                        logger.info('[%s] Venture changed %s → %s, logging out', order_id, last_venture, venture)
+                        handle_logout()
+                    logger.info('[%s] Logging in for %s', order_id, venture)
+                    handle_login_event({'venture': venture})
+                    last_venture = venture
+                except Exception as e:
+                    logger.warning('[%s] Login failed for %s: %s', order_id, venture, e)
+
+            # ── Brand search ──────────────────────────────────────────────
             brand = meta.get('Brand Name') or meta.get('Brand')
             if brand:
                 try:
-                    logger.info('Searching brand %s before processing order %s', brand, order_id)
-                    if not handle_search_brand_event({'brand': brand}):
-                        logger.warning('Brand search flow indicated failure for brand "%s", order %s. Continuing with next order', brand, order_id)
+                    logger.info('[%s] Searching brand: %s', order_id, brand)
+                    found = handle_search_brand_event({'brand': brand})
+                    if not found:
+                        logger.error('[%s] ERROR — Brand not found: %s', order_id, brand)
+                        _stat('error', order_id=order_id, venture=venture,
+                              error=f'Brand không tìm thấy: {brand}',
+                              crop_path=_screenshot_error(order_id, venture, 'brand_not_found'))
                         continue
+                    logger.info('[%s] Brand found: %s', order_id, brand)
                 except Exception as e:
-                    logger.warning('Brand search failed for %s: %s', brand, e)
+                    logger.error('[%s] ERROR — Brand search exception: %s', order_id, e)
+                    _stat('error', order_id=order_id, venture=venture,
+                          error=f'Brand search lỗi: {e}',
+                          crop_path=_screenshot_error(order_id, venture, 'brand_search_exc'))
+                    continue
+
+            # ── Order flow ────────────────────────────────────────────────
+            logger.info('[%s] Opening order page …', order_id)
             result = handle_order_flow_event({'order_id': order_id, 'brand': brand, 'venture': venture})
-            # result may include `adjustment_text` as dict from our handler
-            updates = {}
+
+            if not result.get('opened'):
+                logger.error('[%s] ERROR — Order page không mở được', order_id)
+                _stat('error', order_id=order_id, venture=venture,
+                      error='Không mở được trang order',
+                      crop_path=_screenshot_error(order_id, venture, 'order_not_opened'))
+                continue
+
             adj = result.get('adjustment_text')
+            if adj is None:
+                logger.error('[%s] ERROR — Không tìm thấy adjustment data', order_id)
+                _stat('error', order_id=order_id, venture=venture,
+                      error='Không tìm thấy adjustment data',
+                      crop_path=_screenshot_error(order_id, venture, 'no_adjustment'), ocr_lines=[])
+                continue
+
+            # ── Gather debug artefacts ────────────────────────────────────
+            _ocr_lines = adj.get('__ocr_lines__', []) if isinstance(adj, dict) else []
+            _rc = _debug_dir / f'return_compensation_{venture}_{order_id}.png'
+            if _rc.exists():
+                _crop_path = str(_rc)
+            else:
+                _pc = sorted(_debug_dir.glob('popup_crop_*.png'),
+                             key=lambda p: p.stat().st_mtime, reverse=True)
+                _crop_path = str(_pc[0]) if _pc else None
+
+            # ── Total mismatch check ──────────────────────────────────────
+            check = adj.get('__total_check__') if isinstance(adj, dict) else None
+            if isinstance(check, dict) and not check.get('matches'):
+                exp = check.get('expected_sum')
+                got = check.get('total_value')
+                logger.error('[%s] ERROR — Total mismatch: expected %s, sum of items %s', order_id, exp, got)
+                _shot = _screenshot_error(order_id, venture, 'total_mismatch')
+                _stat('error', order_id=order_id, venture=venture,
+                      error=f'Total không khớp: expected {exp}, sum={got}',
+                      crop_path=_crop_path or _shot, ocr_lines=_ocr_lines)
+                continue
+
+            # ── Build gsheet update dict ───────────────────────────────────
+            from gsheets.order_adjustment_sheet import GSHEET_COLUMN
+            updates = {}
             if isinstance(adj, dict):
-                # map parsed ColumnName keys to GSheet headers
-                from gsheets.order_adjustment_sheet import GSHEET_COLUMN
-                printable = {}
                 for k, v in adj.items():
+                    if str(k).startswith('__'):
+                        continue
                     try:
-                        # k may be ColumnName enum or string; coerce
-                        if not isinstance(k, str):
-                            key = GSHEET_COLUMN.get(k)
-                        else:
-                            # if key looks like ColumnName.XXX, try to eval Enum
-                            key = None
+                        key = GSHEET_COLUMN.get(k) if not isinstance(k, str) else None
                         if key:
-                            printable[key] = str(v)
+                            updates[key] = str(v)
                     except Exception:
                         continue
-                updates = printable
-            # 3) upload updates if any
-            if updates:
-                try:
-                    update_columns_for_order(sheet_id, sheet_name, order_id, updates)
-                except Exception as e:
-                    logger.exception('Failed to update sheet for order %s: %s', order_id, e)
+
+            if not updates:
+                logger.error('[%s] ERROR — Không build được updates từ adj: %s', order_id,
+                             {str(k): v for k, v in adj.items() if not str(k).startswith('__')} if isinstance(adj, dict) else adj)
+                _shot = _screenshot_error(order_id, venture, 'no_updates')
+                _stat('error', order_id=order_id, venture=venture,
+                      error='Không có data để ghi lên gsheet',
+                      crop_path=_crop_path or _shot, ocr_lines=_ocr_lines)
+                continue
+
+            # ── Push to gsheet ────────────────────────────────────────────
+            logger.info('[%s] Pushing to gsheet: %s', order_id, updates)
+            try:
+                update_columns_for_order(sheet_id, sheet_name, order_id, updates)
+                logger.info('[%s] SUCCESS — gsheet updated: %s', order_id, updates)
+                _stat('success', order_id=order_id, venture=venture)
+            except Exception as e:
+                logger.exception('[%s] ERROR — gsheet update failed: %s', order_id, e)
+                _shot = _screenshot_error(order_id, venture, 'gsheet_fail')
+                _stat('error', order_id=order_id, venture=venture,
+                      error=f'gsheet update failed: {e}',
+                      crop_path=_crop_path or _shot, ocr_lines=_ocr_lines)
+
         except Exception as e:
-            logger.exception('Processing failed for order %s: %s', order_id, e)
+            _rc = _debug_dir / f'return_compensation_{venture}_{order_id}.png'
+            _shot = _screenshot_error(order_id, venture, 'exception')
+            _ecrop = str(_rc) if _rc.exists() else _shot
+            logger.exception('[%s] EXCEPTION: %s', order_id, e)
+            _stat('error', order_id=order_id, venture=venture,
+                  error=str(e), crop_path=_ecrop, ocr_lines=[])
 
     # Logout after all orders processed
     try:

@@ -28,5 +28,16 @@
   "toggle_theme_to_dark":  "🌙 Dark",
   "toggle_lang":      "VI",
   "toggle_lang_bg":   "#da251d",
-  "toggle_lang_fg":   "#ffff00"
+  "toggle_lang_fg":   "#ffff00",
+  "section_stats":    " Statistics ",
+  "stat_skip":        "Skipped",
+  "stat_success":     "Success",
+  "stat_error":       "Error",
+  "stat_error_list":  " Error list (click for details) ",
+  "stat_detail_title": "Error Detail",
+  "stat_no_image":    "No image captured",
+  "stat_label_order": "Order ID:",
+  "stat_label_venture": "Venture:",
+  "stat_label_error": "Error:",
+  "stat_label_ocr":   "OCR Data:"
 }

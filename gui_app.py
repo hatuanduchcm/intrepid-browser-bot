@@ -105,7 +105,7 @@ class _QueueHandler(logging.Handler):
 
 
 # ── Bot subprocess entry point (must be at module level for pickling) ─────────
-def _bot_process_target(sheet_id: str, sheet_name: str, log_queue, project_root: str):
+def _bot_process_target(sheet_id: str, sheet_name: str, log_queue, project_root: str, stats_queue=None):
     """Runs the bot in a separate process so it can be terminated instantly."""
     import logging as _log
     from pathlib import Path as _Path
@@ -132,7 +132,7 @@ def _bot_process_target(sheet_id: str, sheet_name: str, log_queue, project_root:
     _os.environ["GSHEET_SHEET_NAME"] = sheet_name
 
     from main import run_batch_process
-    run_batch_process(sheet_id, sheet_name)
+    run_batch_process(sheet_id, sheet_name, stats_queue=stats_queue)
 
 
 # ── Theme definitions ─────────────────────────────────────────────────────────
@@ -205,6 +205,11 @@ class BotApp(tk.Tk):
         self._bot_process: mp.Process | None = None
         self._log_queue: queue.Queue = queue.Queue()
         self._proc_log_queue: mp.Queue = mp.Queue()
+        self._stats_queue: mp.Queue = mp.Queue()
+        # Order statistics (reset each run)
+        self._stat_skip: int = 0
+        self._stat_success: int = 0
+        self._stat_errors: list = []
 
         # Load saved theme preference (default: dark)
         saved_theme = os.getenv("GUI_THEME", "dark")
@@ -273,6 +278,10 @@ class BotApp(tk.Tk):
                     w.configure(bg=t["bg"], fg=t["settings_fg"])
                 elif role == "lf_log":
                     w.configure(bg=t["bg"], fg=t["label_frame"])
+                elif role == "lf_stats":
+                    w.configure(bg=t["bg"], fg=t["label_frame"])
+                elif role == "lf_error_list":
+                    w.configure(bg=t["bg"], fg=t["log_error"])
                 elif role == "entry":
                     w.configure(bg=t["entry_bg"], fg=t["fg"], insertbackground=t["fg"])
                 elif role == "entry_frame":
@@ -290,8 +299,13 @@ class BotApp(tk.Tk):
                     w.configure(bg=t["bg2"], activebackground=t["bg2"])
                 elif role == "status":
                     w.configure(bg=t["bg"], fg=t["fg2"])
-                elif role == "log_text":
-                    w.configure(bg=t["bg3"], fg=t["fg"])
+                elif role == "stat_skip":
+                    w.configure(bg=t["bg"], fg=t["fg2"])
+                elif role == "stat_success":
+                    w.configure(bg=t["bg"], fg=t["log_info"])
+                elif role == "stat_error":
+                    err_count = len(self._stat_errors)
+                    w.configure(bg=t["bg"], fg=t["log_error"] if err_count > 0 else t["fg2"])
                     w.tag_config("ERROR",   foreground=t["log_error"])
                     w.tag_config("WARNING", foreground=t["log_warning"])
                     w.tag_config("INFO",    foreground=t["log_info"])
@@ -304,6 +318,14 @@ class BotApp(tk.Tk):
         style.configure("bot.Horizontal.TProgressbar",
                         troughcolor=t["progress_bg"],
                         background=t["accent"], thickness=4)
+        # Error listbox colors
+        try:
+            self._error_listbox.configure(bg=t["bg3"], fg=t["fg"],
+                                          selectbackground=t["bg2"],
+                                          selectforeground=t["log_error"])
+            self._error_list_frame.configure(bg=t["bg"])
+        except Exception:
+            pass
 
     def _toggle_theme(self):
         self._theme_name = "light" if self._theme_name == "dark" else "dark"
@@ -384,6 +406,9 @@ class BotApp(tk.Tk):
                 self._lang_btn.configure(image="", text=L.get("toggle_lang", ""))
             # Sync status text to current language
             self._set_status(self._current_status_key)
+            # Update stats section
+            self._stats_lf.configure(text=L.get("section_stats", ""))
+            self._update_stat_labels()
         except Exception:
             pass
 
@@ -616,6 +641,63 @@ class BotApp(tk.Tk):
         )
         self._progress.pack(fill=tk.X, padx=16, pady=(0, 4))
 
+        # ── Stats panel ───────────────────────────────────────────────────────
+        self._stats_lf = self._reg(tk.LabelFrame(
+            self, text=self._("section_stats"), font=("Segoe UI", 10),
+            bg=t["bg"], fg=t["label_frame"], bd=1, relief=tk.GROOVE
+        ), "lf_stats")
+        self._stats_lf.pack(fill=tk.X, padx=16, pady=(0, 4))
+
+        # Row: three count badges
+        counts_row = self._reg(tk.Frame(self._stats_lf, bg=t["bg"]), "bg")
+        counts_row.pack(fill=tk.X, padx=6, pady=(4, 2))
+
+        self._stat_skip_var    = tk.StringVar(value=f"{self._('stat_skip')}: 0")
+        self._stat_success_var = tk.StringVar(value=f"{self._('stat_success')}: 0")
+        self._stat_error_var   = tk.StringVar(value=f"{self._('stat_error')}: 0")
+
+        self._reg(tk.Label(
+            counts_row, textvariable=self._stat_skip_var,
+            bg=t["bg"], fg=t["fg2"], font=("Segoe UI", 10),
+        ), "stat_skip").pack(side=tk.LEFT, padx=(0, 16))
+
+        self._reg(tk.Label(
+            counts_row, textvariable=self._stat_success_var,
+            bg=t["bg"], fg=t["log_info"], font=("Segoe UI", 10, "bold"),
+        ), "stat_success").pack(side=tk.LEFT, padx=(0, 16))
+
+        self._stat_error_lbl = self._reg(tk.Label(
+            counts_row, textvariable=self._stat_error_var,
+            bg=t["bg"], fg=t["fg2"], font=("Segoe UI", 10),
+            cursor="hand2",
+        ), "stat_error")
+        self._stat_error_lbl.pack(side=tk.LEFT)
+        self._stat_error_lbl.bind("<Button-1>", self._on_error_label_click)
+
+        # Error list (hidden until first error appears)
+        self._error_list_frame = tk.Frame(self._stats_lf, bg=t["bg"])
+        # Do NOT pack yet — shown dynamically when errors arrive
+
+        _err_lf = self._reg(tk.LabelFrame(
+            self._error_list_frame,
+            text=self._("stat_error_list"),
+            font=("Segoe UI", 9),
+            bg=t["bg"], fg=t["log_error"], bd=1, relief=tk.GROOVE,
+        ), "lf_error_list")
+        _err_lf.pack(fill=tk.X, padx=4, pady=(0, 4))
+
+        self._error_listbox = tk.Listbox(
+            _err_lf, height=4, selectmode=tk.SINGLE,
+            bg=t["bg3"], fg=t["fg"], font=("Consolas", 9),
+            relief=tk.FLAT, bd=0, activestyle="none",
+            selectbackground=t["bg2"], selectforeground=t["log_error"],
+        )
+        _err_scroll = ttk.Scrollbar(_err_lf, command=self._error_listbox.yview)
+        self._error_listbox.configure(yscrollcommand=_err_scroll.set)
+        self._error_listbox.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0), pady=4)
+        _err_scroll.pack(side=tk.RIGHT, fill=tk.Y, pady=4)
+        self._error_listbox.bind("<<ListboxSelect>>", self._on_error_click)
+
         # ── Log output ────────────────────────────────────────────────────────
         self._log_lf = self._reg(tk.LabelFrame(
             self, text=self._("section_log"), font=("Segoe UI", 10),
@@ -652,15 +734,17 @@ class BotApp(tk.Tk):
 
     def _append_log(self, message: str):
         self._log_text.configure(state=tk.NORMAL)
-        # Determine tag from level keyword in message
-        tag = "INFO"
-        up = message.upper()
-        if "ERROR" in up or "EXCEPTION" in up or "CRITICAL" in up:
-            tag = "ERROR"
-        elif "WARNING" in up or "WARN" in up:
-            tag = "WARNING"
-        elif "DEBUG" in up:
-            tag = "DEBUG"
+        # Derive tag from the level prefix produced by the log formatter
+        # Format: "LEVELNAME | logger.name | message text"
+        _first = message.split('|', 1)[0].strip().upper() if '|' in message else ''
+        if _first in ('ERROR', 'CRITICAL', 'EXCEPTION'):
+            tag = 'ERROR'
+        elif _first == 'WARNING':
+            tag = 'WARNING'
+        elif _first == 'DEBUG':
+            tag = 'DEBUG'
+        else:
+            tag = 'INFO'
         self._log_text.insert(tk.END, message + "\n", tag)
         self._log_text.see(tk.END)
         self._log_text.configure(state=tk.DISABLED)
@@ -685,9 +769,156 @@ class BotApp(tk.Tk):
                     self._append_log(msg)
             except Exception:
                 pass
+        # Drain stats queue separately
+        try:
+            while True:
+                ev = self._stats_queue.get_nowait()
+                if isinstance(ev, dict) and ev.get('type') == 'stat':
+                    self._handle_stat_event(ev)
+        except Exception:
+            pass
         self.after(100, self._poll_log_queue)
 
     # ── Bot thread ────────────────────────────────────────────────────────────
+
+    def _reset_stats(self):
+        """Reset all order stats counters and clear the error list."""
+        self._stat_skip = 0
+        self._stat_success = 0
+        self._stat_errors = []
+        self._stat_skip_var.set(f"{self._('stat_skip')}: 0")
+        self._stat_success_var.set(f"{self._('stat_success')}: 0")
+        self._stat_error_var.set(f"{self._('stat_error')}: 0")
+        self._error_listbox.delete(0, tk.END)
+        self._error_list_frame.pack_forget()
+
+    def _update_stat_labels(self):
+        self._stat_skip_var.set(f"{self._('stat_skip')}: {self._stat_skip}")
+        self._stat_success_var.set(f"{self._('stat_success')}: {self._stat_success}")
+        err_count = len(self._stat_errors)
+        self._stat_error_var.set(f"{self._('stat_error')}: {err_count}")
+        t = self._theme
+        if err_count > 0:
+            self._stat_error_lbl.configure(fg=t["log_error"])
+        else:
+            self._stat_error_lbl.configure(fg=t["fg2"])
+
+    def _handle_stat_event(self, ev: dict):
+        etype = ev.get('event')
+        if etype == 'skip':
+            self._stat_skip += 1
+        elif etype == 'success':
+            self._stat_success += 1
+        elif etype == 'error':
+            self._stat_errors.append(ev)
+            order_id = ev.get('order_id', '?')
+            venture  = ev.get('venture', '')
+            tag = f"  {order_id}" + (f"  ({venture})" if venture else "")
+            self._error_listbox.insert(tk.END, tag)
+            if len(self._stat_errors) == 1:
+                # show the error list frame for the first time
+                self._error_list_frame.pack(fill=tk.X, padx=4, pady=(0, 2))
+        self._update_stat_labels()
+
+    def _on_error_label_click(self, _event=None):
+        """Clicking the error count label opens the last error detail (or selects first)."""
+        if self._stat_errors:
+            self._show_error_detail(self._stat_errors[-1])
+
+    def _on_error_click(self, _event=None):
+        """Double/single click on an error list item opens its detail popup."""
+        sel = self._error_listbox.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        if idx < len(self._stat_errors):
+            self._show_error_detail(self._stat_errors[idx])
+
+    def _show_error_detail(self, ev: dict):
+        """Open a Toplevel window showing error details, OCR text, and the debug image."""
+        t = self._theme
+        order_id = ev.get('order_id', '?')
+        venture  = ev.get('venture', '')
+        error    = ev.get('error', '')
+        crop_path = ev.get('crop_path')
+        ocr_lines = ev.get('ocr_lines') or []
+
+        top = tk.Toplevel(self)
+        top.title(f"{self._('stat_detail_title')} — {order_id}")
+        top.configure(bg=t["bg"])
+        top.resizable(True, True)
+        top.minsize(520, 360)
+
+        # ── Header info ──────────────────────────────────────────────────────
+        info_frame = tk.Frame(top, bg=t["bg2"], pady=8)
+        info_frame.pack(fill=tk.X)
+
+        def _inf_lbl(label_key, value, bold=False):
+            row = tk.Frame(info_frame, bg=t["bg2"])
+            row.pack(fill=tk.X, padx=12, pady=1)
+            tk.Label(row, text=self._(label_key), bg=t["bg2"], fg=t["fg2"],
+                      font=("Segoe UI", 9)).pack(side=tk.LEFT)
+            tk.Label(row, text=value, bg=t["bg2"], fg=t["fg"],
+                      font=("Segoe UI", 9, "bold" if bold else "normal"),
+                      wraplength=480, justify=tk.LEFT).pack(side=tk.LEFT, padx=(4, 0))
+
+        _inf_lbl("stat_label_order",   order_id,  bold=True)
+        if venture:
+            _inf_lbl("stat_label_venture", venture)
+        if error:
+            _inf_lbl("stat_label_error",   error)
+
+        # ── Body: image (left) + OCR text (right) ────────────────────────────
+        body = tk.Frame(top, bg=t["bg"])
+        body.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        body.columnconfigure(1, weight=1)
+        body.rowconfigure(0, weight=1)
+
+        # Left: debug image
+        img_frame = tk.Frame(body, bg=t["bg2"], width=320)
+        img_frame.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 6))
+        img_frame.pack_propagate(False)
+
+        _img_lbl = tk.Label(img_frame, bg=t["bg2"])
+        _img_lbl.pack(expand=True)
+
+        # Load image in background so dialog opens instantly
+        def _load_image():
+            if crop_path:
+                try:
+                    img = Image.open(crop_path)
+                    # Fit inside 310×200 keeping aspect ratio
+                    img.thumbnail((310, 200), Image.LANCZOS)
+                    photo = ImageTk.PhotoImage(img)
+                    def _set(p=photo):
+                        _img_lbl.configure(image=p, text="")
+                        _img_lbl._photo_ref = p
+                    top.after(0, _set)
+                    return
+                except Exception:
+                    pass
+            def _no_img():
+                _img_lbl.configure(text=self._("stat_no_image"),
+                                   fg=t["fg2"], font=("Segoe UI", 9))
+            top.after(0, _no_img)
+
+        threading.Thread(target=_load_image, daemon=True).start()
+
+        # Right: OCR lines
+        ocr_frame = tk.Frame(body, bg=t["bg"])
+        ocr_frame.grid(row=0, column=1, sticky=tk.NSEW)
+
+        tk.Label(ocr_frame, text=self._("stat_label_ocr"),
+                 bg=t["bg"], fg=t["fg2"], font=("Segoe UI", 9)).pack(anchor=tk.W)
+
+        ocr_box = scrolledtext.ScrolledText(
+            ocr_frame, bg=t["bg3"], fg=t["fg"],
+            font=("Consolas", 9), relief=tk.FLAT, wrap=tk.WORD,
+        )
+        ocr_box.pack(fill=tk.BOTH, expand=True)
+        ocr_content = "\n".join(ocr_lines) if ocr_lines else "—"
+        ocr_box.insert(tk.END, ocr_content)
+        ocr_box.configure(state=tk.DISABLED)
 
     def _on_toggle(self):
         if self._bot_process and self._bot_process.is_alive():
@@ -723,6 +954,7 @@ class BotApp(tk.Tk):
         self._run_btn.configure(text=self._("btn_stop"), bg=t["danger"], fg=t["danger_fg"])
         self._set_status("status_running")
         self._progress.start(12)
+        self._reset_stats()
 
         # Drain stale messages from previous run
         try:
@@ -730,10 +962,15 @@ class BotApp(tk.Tk):
                 self._proc_log_queue.get_nowait()
         except Exception:
             pass
+        try:
+            while True:
+                self._stats_queue.get_nowait()
+        except Exception:
+            pass
 
         self._bot_process = mp.Process(
             target=_bot_process_target,
-            args=(sheet_id, sheet_name, self._proc_log_queue, str(_PROJECT_ROOT)),
+            args=(sheet_id, sheet_name, self._proc_log_queue, str(_PROJECT_ROOT), self._stats_queue),
             daemon=True,
         )
         self._bot_process.start()

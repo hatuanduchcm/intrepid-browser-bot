@@ -85,7 +85,14 @@ def handle_copy_adjustment_event(event_payload):
             if not num and raw_text.strip():
                 _, num = split_text_and_number(raw_text.strip())
             value = clean_amount(num, venture=venture) if num else ''
-            logger.info('return_compensation value: %s', value)
+            logger.info('return_compensation value: %s (raw_text=%r)', value, raw_text)
+            # cleanup crop file — keep only when value could not be extracted (for debugging)
+            try:
+                if value and comp_crop:
+                    Path(comp_crop).unlink(missing_ok=True)
+                    logger.debug('return_compensation crop deleted: %s', comp_crop)
+            except Exception:
+                logger.debug('Failed to delete return_compensation crop: %s', comp_crop)
             return {ColumnName.REFUND_COMPENSATION: value}
 
         crop_path = crop_result if isinstance(crop_result, str) else None
@@ -191,15 +198,15 @@ def _capture_return_compensation_value(venture: str = '', order_id: str = '') ->
             logger.debug('return_compensation_row not found on screen')
             return None
 
-        # Capture the entire row from right of the label to the right screen edge
-        # Released Amount column is far right — must capture wide enough
+        # Capture from the left edge of the matched row (avoids left sidebar icons)
+        # and extend to the right screen edge. Height covers 3 rows (current + 2 below).
         import mss, mss.tools
         screen_w, screen_h = pyautogui.size()
-        label_right = match.left + match.width
-        value_x  = label_right + 10
+        row_h    = max(match.height, 30)
+        value_x  = max(0, match.left - 10)      # start just before the matched label
         value_y  = match.top
-        value_h  = max(match.height, 30)          # at least 30px tall
-        value_w  = max(screen_w - value_x - 10, 50)  # stretch to right edge
+        value_h  = row_h * 3                     # current row + 2 rows below
+        value_w  = screen_w - 120 - value_x      # exclude far-right sidebar/scrollbar
 
         crop_path = DEBUG_DIR / f'return_compensation_{venture}_{order_id}.png'
         try:

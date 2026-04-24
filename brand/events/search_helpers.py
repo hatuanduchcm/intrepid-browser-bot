@@ -1,6 +1,7 @@
 from pathlib import Path
 import logging
 import time
+import re as _re
 import pyautogui
 
 logger = logging.getLogger(__name__)
@@ -68,6 +69,80 @@ def find_and_click_brand_tab(brand_name: str, confidences: tuple = (0.9, 0.85, 0
     return False
 
 
+def wait_for_shop_url(venture: str = '', timeout: float = 15.0, stable_for: float = 2.0) -> bool:
+    """Wait until the Intrepid address bar shows a Shopee shop URL and stays stable.
+
+    Matches patterns like:
+      https://shopee.vn/<slug>/
+      https://*.shopee.co.id/<slug>/
+    Returns True once the URL has been stable for `stable_for` seconds.
+    Returns False if `timeout` is reached without stabilising.
+    """
+    from utils.window import get_intrepid_window
+
+    # Build pattern: matches shopee domain with optional path
+    # e.g. https://banhang.shopee.vn/ or https://shopee.vn/brand-slug
+    _BASE_PATTERNS = [
+        _re.compile(r'https?://[^/]*shopee\.[^/]+', _re.IGNORECASE),
+    ]
+
+    def _get_url() -> str:
+        """Try to read the address bar text via pywinauto."""
+        try:
+            w = get_intrepid_window()
+            if not w:
+                return ''
+            # Chrome/Edge address bar is an Edit control inside a toolbar
+            for ctrl_type in ('Edit', 'Document'):
+                try:
+                    bars = w.descendants(control_type=ctrl_type)
+                    for bar in bars:
+                        try:
+                            val = bar.get_value() or bar.window_text() or ''
+                            if val.startswith('http'):
+                                return val.strip()
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return ''
+
+    deadline = time.time() + timeout
+    stable_since = None
+    last_url = ''
+
+    while time.time() < deadline:
+        url = _get_url()
+        is_shop = any(p.search(url) for p in _BASE_PATTERNS)
+        # exclude known transient/auth URLs
+        is_transient = any(x in url for x in ('verify', 'login', 'auth', 'email-link'))
+
+        if is_shop and not is_transient:
+            if url == last_url:
+                if stable_since is None:
+                    stable_since = time.time()
+                elif time.time() - stable_since >= stable_for:
+                    logger.info('[wait_for_shop_url] stable at: %s', url)
+                    return True
+            else:
+                # URL changed — reset stability timer
+                stable_since = None
+                last_url = url
+                logger.debug('[wait_for_shop_url] navigating: %s', url)
+        else:
+            stable_since = None
+            last_url = url
+            if url:
+                logger.debug('[wait_for_shop_url] waiting, current: %s', url)
+
+        time.sleep(0.5)
+
+    logger.warning('[wait_for_shop_url] timed out after %.0fs, last url: %s', timeout, last_url)
+    return False
+
+
 def shop_not_found_present(confidence: float = 0.85) -> bool:
     """Return True if the 'shop_not_found.png' image appears on screen.
 
@@ -82,7 +157,7 @@ def shop_not_found_present(confidence: float = 0.85) -> bool:
         loc = pyautogui.locateOnScreen(str(shop_not_found), confidence=confidence)
         return bool(loc)
     except Exception as e:
-        logger.debug('Error checking for shop_not_found image: %s', e)
+        logger.debug('Shop not found not detected due to: %s', e)
         return False
 
 

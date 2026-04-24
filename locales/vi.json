@@ -28,5 +28,16 @@
   "toggle_theme_to_dark":  "🌙 Dark",
   "toggle_lang":      "EN",
   "toggle_lang_bg":   "#012169",
-  "toggle_lang_fg":   "#ffffff"
+  "toggle_lang_fg":   "#ffff00",
+  "section_stats":    " Thống kê ",
+  "stat_skip":        "Bỏ qua",
+  "stat_success":     "Thành công",
+  "stat_error":       "Lỗi",
+  "stat_error_list":  " Danh sách lỗi (click để xem chi tiết) ",
+  "stat_detail_title": "Chi tiết lỗi",
+  "stat_no_image":    "Không có ảnh",
+  "stat_label_order": "Order ID:",
+  "stat_label_venture": "Venture:",
+  "stat_label_error": "Lỗi:",
+  "stat_label_ocr":   "Dữ liệu OCR:"
 }
