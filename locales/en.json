@@ -39,5 +39,20 @@
   "stat_label_order": "Order ID:",
   "stat_label_venture": "Venture:",
   "stat_label_error": "Error:",
-  "stat_label_ocr":   "OCR Data:"
+  "stat_label_ocr":   "OCR Data:",
+
+  "settings_dialog_title": "Settings",
+  "settings_section_gsheet": "Google Sheet",
+  "settings_section_intrepid": "Intrepid Browser",
+  "settings_section_intrepid_id": "Intrepid ID (special)",
+  "settings_label_sheet_id": "Sheet ID:",
+  "settings_label_sheet_name": "Sheet Name:",
+  "settings_label_sa_json":    "SA JSON (path or JSON content):",
+  "settings_label_user_tpl": "User Template:",
+  "settings_label_pass": "Password (shared):",
+  "settings_label_user_id": "User ID:",
+  "settings_label_pass_id": "Password ID:",
+  "settings_btn_save": "Save",
+  "settings_btn_cancel": "Cancel",
+  "settings_saved": "Settings saved."
 }

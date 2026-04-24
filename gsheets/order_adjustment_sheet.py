@@ -169,7 +169,14 @@ def _open_sheet(sheet_id: str, sheet_name: str):
         env_path = os.getenv('GOOGLE_SERVICE_ACCOUNT_PATH')
         if not env_path:
             raise RuntimeError('GOOGLE_SERVICE_ACCOUNT_PATH not set')
-        creds = Credentials.from_service_account_file(env_path, scopes=scopes)
+        env_path = env_path.strip()
+        # Support inline JSON content (starts with '{') in addition to file path
+        if env_path.startswith('{'):
+            import json as _json
+            info = _json.loads(env_path)
+            creds = Credentials.from_service_account_info(info, scopes=scopes)
+        else:
+            creds = Credentials.from_service_account_file(env_path, scopes=scopes)
     except Exception as e:
         logger.error('Failed to load service account credentials from GOOGLE_SERVICE_ACCOUNT_PATH: %s', e)
         raise

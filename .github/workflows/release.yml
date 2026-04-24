@@ -92,13 +92,19 @@ jobs:
             -DestinationPath InvoiceAdjustmentBot.zip
 
       - name: Create GitHub Release (dist repo)
-        uses: softprops/action-gh-release@v2
-        with:
-          repository: hatuanduc/intrepid-browser-bot-dist
-          tag_name: v${{ steps.ver.outputs.version }}
-          name: v${{ steps.ver.outputs.version }}
-          body: |
-            Auto-release từ commit ${{ github.sha }}
-          files: InvoiceAdjustmentBot.zip
+        shell: pwsh
         env:
-          GITHUB_TOKEN: ${{ secrets.INTREPID_BROWSER_BOT_DIST_RELEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.INTREPID_BROWSER_BOT_DIST_RELEASE_TOKEN }}
+        run: |
+          $tag = "v${{ steps.ver.outputs.version }}"
+          $repo = "hatuanduc/intrepid-browser-bot-dist"
+          # Delete existing release+tag if present (idempotent re-run)
+          $exists = gh release view $tag --repo $repo 2>&1
+          if ($LASTEXITCODE -eq 0) {
+            gh release delete $tag --repo $repo --yes --cleanup-tag
+          }
+          gh release create $tag `
+            --repo $repo `
+            --title $tag `
+            --notes "Auto-release from commit ${{ github.sha }}" `
+            InvoiceAdjustmentBot.zip

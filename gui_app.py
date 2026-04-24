@@ -183,6 +183,195 @@ THEMES = {
     },
 }
 
+# ── Settings Dialog ───────────────────────────────────────────────────────────
+
+class _SettingsDialog(tk.Toplevel):
+    """Modal dialog to view/edit important .env variables."""
+
+    # (env_key, locale_label_key, is_password, is_path, is_json)
+    _GSHEET_FIELDS = [
+        ('GSHEET_ID',                    'settings_label_sheet_id',   False, False, False),
+        ('GSHEET_SHEET_NAME',            'settings_label_sheet_name', False, False, False),
+        ('GOOGLE_SERVICE_ACCOUNT_PATH',  'settings_label_sa_json',    False, True,  False),
+    ]
+    _INTREPID_FIELDS = [
+        ('INTREPID_USER_TEMPLATE', 'settings_label_user_tpl', False, False, False),
+        ('INTREPID_PASS',          'settings_label_pass',     True,  False, False),
+    ]
+    _INTREPID_ID_FIELDS = [
+        ('INTREPID_USER_ID',  'settings_label_user_id',  False, False, False),
+        ('INTREPID_PASS_ID',  'settings_label_pass_id',  True,  False, False),
+    ]
+
+    def __init__(self, parent: 'BotApp'):
+        super().__init__(parent)
+        self._parent = parent
+        L = parent._locale
+        t = parent._theme
+
+        self.title(L.get('settings_dialog_title', 'Settings'))
+        self.configure(bg=t['bg'])
+        self.resizable(True, True)
+        self.minsize(720, 600)
+        self.grab_set()   # modal
+
+        self._vars:      dict[str, tk.StringVar] = {}
+        self._textareas: dict[str, tk.Text]      = {}  # for multiline JSON path
+        self._eye_btns:  dict[str, tk.Button]    = {}
+        self._show_pass: dict[str, bool]         = {}
+
+        # scrollable body
+        outer = tk.Frame(self, bg=t['bg'])
+        outer.pack(fill=tk.BOTH, expand=True)
+        canvas = tk.Canvas(outer, bg=t['bg'], highlightthickness=0)
+        vsb = ttk.Scrollbar(outer, orient='vertical', command=canvas.yview)
+        canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        body = tk.Frame(canvas, bg=t['bg'])
+        _body_id = canvas.create_window((0, 0), window=body, anchor='nw')
+        def _on_resize(e):
+            canvas.itemconfigure(_body_id, width=e.width)
+        canvas.bind('<Configure>', _on_resize)
+        body.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        # mouse-wheel scroll
+        def _on_mousewheel(e):
+            canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units')
+        canvas.bind_all('<MouseWheel>', _on_mousewheel)
+        self.bind('<Destroy>', lambda e: canvas.unbind_all('<MouseWheel>'))
+
+        body.columnconfigure(0, weight=1)
+
+        def _section(label_key):
+            lf = tk.LabelFrame(body, text=L.get(label_key, label_key),
+                               font=('Segoe UI', 10), bg=t['bg'],
+                               fg=t['settings_fg'], bd=1, relief=tk.GROOVE)
+            lf.pack(fill=tk.X, padx=12, pady=(0, 10))
+            lf.columnconfigure(1, weight=1)
+            return lf
+
+        def _add_field(frame, row, env_key, label_key, is_password, is_path, is_json=False):
+            tk.Label(frame, text=L.get(label_key, label_key),
+                     bg=t['bg'], fg=t['fg'],
+                     font=('Segoe UI', 9), anchor=tk.W,
+                     width=22).grid(row=row, column=0, sticky=tk.NW, padx=(8, 4), pady=6)
+
+            cell = tk.Frame(frame, bg=t['bg'])
+            cell.grid(row=row, column=1, sticky=tk.EW, padx=(0, 8), pady=6)
+            cell.columnconfigure(0, weight=1)
+
+            if is_path:
+                # multiline Text widget — accepts file path OR raw JSON content
+                txt = tk.Text(cell, height=6, wrap=tk.WORD,
+                              bg=t['entry_bg'], fg=t['fg'], insertbackground=t['fg'],
+                              relief=tk.FLAT, font=('Consolas', 9))
+                txt.insert('1.0', os.getenv(env_key, ''))
+                txt.grid(row=0, column=0, sticky=tk.EW)
+                self._textareas[env_key] = txt
+
+                def _browse(w=txt):
+                    from tkinter import filedialog
+                    path = filedialog.askopenfilename(
+                        title=L.get('browse_dialog_title', 'Select file'),
+                        filetypes=[('JSON files', '*.json'), ('All files', '*.*')]
+                    )
+                    if path:
+                        w.delete('1.0', tk.END)
+                        w.insert('1.0', path)
+                tk.Button(cell, text='…', command=_browse,
+                          bg=t['btn_neutral'], fg=t['btn_neu_fg'],
+                          relief=tk.FLAT, font=('Segoe UI', 9),
+                          padx=8, cursor='hand2').grid(row=0, column=1, sticky=tk.N, padx=(4, 0))
+            else:
+                var = tk.StringVar(value=os.getenv(env_key, ''))
+                self._vars[env_key] = var
+                entry = tk.Entry(
+                    cell, textvariable=var,
+                    show='•' if is_password else '',
+                    bg=t['entry_bg'], fg=t['fg'], insertbackground=t['fg'],
+                    relief=tk.FLAT, font=('Consolas', 9),
+                )
+                entry.grid(row=0, column=0, sticky=tk.EW)
+
+                if is_password:
+                    self._show_pass[env_key] = False
+                    def _toggle(ek=env_key, e=entry):
+                        self._show_pass[ek] = not self._show_pass[ek]
+                        e.configure(show='' if self._show_pass[ek] else '•')
+                        self._eye_btns[ek].configure(
+                            text='🙈' if self._show_pass[ek] else '👁')
+                    eye = tk.Button(cell, text='👁', command=_toggle,
+                                    bg=t['bg2'], fg=t['fg'], relief=tk.FLAT,
+                                    font=('Segoe UI', 10), padx=6, cursor='hand2')
+                    eye.grid(row=0, column=1, padx=(4, 0))
+                    self._eye_btns[env_key] = eye
+
+        # ── Section: Google Sheet ─────────────────────────────────────────────
+        gs = _section('settings_section_gsheet')
+        for i, (ek, lk, pw, fp, jj) in enumerate(self._GSHEET_FIELDS):
+            _add_field(gs, i, ek, lk, pw, fp, jj)
+
+        # ── Section: Intrepid Browser ─────────────────────────────────────────
+        ib = _section('settings_section_intrepid')
+        for i, (ek, lk, pw, fp, jj) in enumerate(self._INTREPID_FIELDS):
+            _add_field(ib, i, ek, lk, pw, fp, jj)
+
+        # ── Section: Intrepid ID (special) ────────────────────────────────────
+        ii = _section('settings_section_intrepid_id')
+        for i, (ek, lk, pw, fp, jj) in enumerate(self._INTREPID_ID_FIELDS):
+            _add_field(ii, i, ek, lk, pw, fp, jj)
+
+        # bottom padding inside scroll area
+        tk.Frame(body, bg=t['bg'], height=8).pack()
+
+        # ── Buttons (outside scroll) ──────────────────────────────────────────
+        btn_row = tk.Frame(self, bg=t['bg2'])
+        btn_row.pack(fill=tk.X, padx=0, pady=0)
+        tk.Button(btn_row, text=L.get('settings_btn_save', 'Save'),
+                  command=self._save,
+                  bg=t['accent'], fg=t['accent_fg'],
+                  font=('Segoe UI', 10, 'bold'),
+                  relief=tk.FLAT, padx=20, pady=8, cursor='hand2',
+                  ).pack(side=tk.LEFT, padx=16, pady=10)
+        tk.Button(btn_row, text=L.get('settings_btn_cancel', 'Cancel'),
+                  command=self.destroy,
+                  bg=t['btn_neutral'], fg=t['btn_neu_fg'],
+                  font=('Segoe UI', 10),
+                  relief=tk.FLAT, padx=20, pady=8, cursor='hand2',
+                  ).pack(side=tk.LEFT)
+
+        # center on parent
+        self.update_idletasks()
+        pw_x = parent.winfo_x() + (parent.winfo_width()  - self.winfo_width())  // 2
+        pw_y = parent.winfo_y() + (parent.winfo_height() - self.winfo_height()) // 2
+        self.geometry(f'800x640+{pw_x}+{pw_y}')
+
+    def _save(self):
+        all_fields = self._GSHEET_FIELDS + self._INTREPID_FIELDS + self._INTREPID_ID_FIELDS
+        for env_key, _, _, is_path, _ in all_fields:
+            if is_path and env_key in self._textareas:
+                val = self._textareas[env_key].get('1.0', tk.END).strip()
+            else:
+                val = self._vars.get(env_key, tk.StringVar()).get().strip()
+            os.environ[env_key] = val
+            try:
+                if _ENV_FILE.exists():
+                    set_key(str(_ENV_FILE), env_key, val)
+            except Exception:
+                pass
+        # sync sheet fields back to main window
+        try:
+            self._parent._sheet_id_var.set(os.getenv('GSHEET_ID', ''))
+            self._parent._sheet_name_var.set(os.getenv('GSHEET_SHEET_NAME', ''))
+            self._parent._sa_path_var.set(os.getenv('GOOGLE_SERVICE_ACCOUNT_PATH', ''))
+        except Exception:
+            pass
+        msg = self._parent._locale.get('settings_saved', 'Settings saved.')
+        messagebox.showinfo(
+            self._parent._locale.get('settings_dialog_title', 'Settings'), msg, parent=self)
+        self.destroy()
+
+
 # ── Main App ──────────────────────────────────────────────────────────────────
 
 class BotApp(tk.Tk):
@@ -392,6 +581,7 @@ class BotApp(tk.Tk):
             _is_running = bool(self._bot_process and self._bot_process.is_alive())
             self._run_btn.configure(text=L.get("btn_stop" if _is_running else "btn_run", ""))
             self._btn_clear.configure(text=L.get("btn_clear_log", ""))
+            self._settings_btn.configure(text="⚙  " + L.get("settings_dialog_title", "Settings"))
             self._log_lf.configure(text=L.get("section_log", ""))
             self._log_lf.configure(fg=t["label_frame"])
             # Theme toggle text depends on current theme
@@ -422,6 +612,9 @@ class BotApp(tk.Tk):
             os.environ["GUI_LANG"] = self._lang
         except Exception:
             pass
+
+    def _open_settings(self):
+        _SettingsDialog(self)
 
     def _reg(self, widget, role: str):
         """Register widget for theme tracking."""
@@ -555,7 +748,7 @@ class BotApp(tk.Tk):
         ), "btn_toggle")
         self._toggle_btn.pack(side=tk.RIGHT, padx=12)
 
-        # ── Settings frame ───────────────────────────────────────────────────
+        # ── Settings frame ─────────────────────────────────────────────────────────
         self._settings_lf = self._reg(tk.LabelFrame(
             self, text=self._("section_settings"), font=("Segoe UI", 10),
             bg=t["bg"], fg=t["settings_fg"], bd=1, relief=tk.GROOVE
@@ -618,6 +811,14 @@ class BotApp(tk.Tk):
             relief=tk.FLAT, padx=12, pady=8, cursor="hand2",
         ), "btn_neutral")
         self._btn_clear.pack(side=tk.LEFT)
+
+        self._settings_btn = self._reg(tk.Button(
+            btn_frame, text="⚙  "+self._("settings_dialog_title"), command=self._open_settings,
+            bg=t["btn_neutral"], fg=t["btn_neu_fg"],
+            font=("Segoe UI", 10),
+            relief=tk.FLAT, padx=12, pady=8, cursor="hand2",
+        ), "btn_neutral")
+        self._settings_btn.pack(side=tk.LEFT, padx=(8, 0))
 
         # Status indicator (colored dot) + text
         self._status_var = tk.StringVar(value=self._("status_ready"))
