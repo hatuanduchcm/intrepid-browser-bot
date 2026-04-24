@@ -46,6 +46,7 @@ class ColumnName(Enum):
     GAP = 'GAP'
     COFUND_VOUCHER_SPONSORED_BY_SELLER = 'COFUND_VOUCHER_SPONSORED_BY_SELLER'
     TOTAL_ADJUSTMENT_AMOUNT = 'TOTAL_ADJUSTMENT_AMOUNT'
+    REFUND_COMPENSATION = 'REFUND_COMPENSATION'
 
 
 # Simplified mappings requested: two separate maps
@@ -77,6 +78,7 @@ ADJUSTMENT_COLUMNS = {
     ColumnName.ORIGINAL_PRODUCT_PRICE: ["Original product price"],
     ColumnName.GAP: ["Gap"],
     ColumnName.TOTAL_ADJUSTMENT_AMOUNT: ["Total Adjustment Amount"],
+    ColumnName.REFUND_COMPENSATION: ["Grace Period Return/Refund Compensation", "Return/Refund Compensation", "Refund Compensation"],
 }
 
 # Map ColumnName -> GSheet header text
@@ -106,6 +108,7 @@ GSHEET_COLUMN = {
     ColumnName.GAP: "Gap",
     ColumnName.COFUND_VOUCHER_SPONSORED_BY_SELLER: "Cofund Voucher Sponsored by Seller",
     ColumnName.TOTAL_ADJUSTMENT_AMOUNT: "Total Adjustment Amount",
+    ColumnName.REFUND_COMPENSATION: "Refund Compensation",
 }
 
 def find_columnname_by_shopee_label(label: str) -> Union[ColumnName, None]:

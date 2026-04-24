@@ -52,7 +52,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force C:\tess-cache | Out-Null
-          Invoke-WebRequest -Uri "https://github.com/UB-Mannheim/tesseract/releases/download/v5.5.0.20241111/tesseract-ocr-w64-setup-5.5.0.20241111.exe" `
+          Invoke-WebRequest -Uri "https://github.com/tesseract-ocr/tesseract/releases/download/5.5.0/tesseract-ocr-w64-setup-5.5.0.20241111.exe" `
             -OutFile "C:\tess-cache\tesseract-setup.exe"
 
       - name: Install Tesseract

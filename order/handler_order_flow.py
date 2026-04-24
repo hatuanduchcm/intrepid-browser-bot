@@ -1,5 +1,4 @@
 from order.events.handler_open_order import handle_open_order_event
-from order.events.handler_find_adjustment import handle_find_adjustment_event
 from order.events.handler_copy_adjustment import handle_copy_adjustment_event
 from utils.close_tab import close_tab_event
 from brand.handler_search_brand import should_process_brand
@@ -28,14 +27,6 @@ def handle_order_flow_event(event_payload):
 
     if not opened:
         return result
-
-    # try:
-    #     result['found_adjustment'] = handle_find_adjustment_event({})
-    # except Exception as e:
-    #     logger.debug('find_adjustment failed: %s', e)
-
-    # if not result['found_adjustment']:
-    #     return result
 
     try:
         txt = handle_copy_adjustment_event({'venture': event_payload.get('venture', '')})
