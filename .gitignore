@@ -1,0 +1,18 @@
+# Ignore Python bytecode
+__pycache__/
+*.py[cod]
+
+# Env files
+.env
+
+# VS Code
+.vscode/
+
+# Temp debug_matches folder
+debug_matches/
+
+# Ignore distribution files
+dist/
+build/
+*.spec
+key/

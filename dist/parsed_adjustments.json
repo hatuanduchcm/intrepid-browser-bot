@@ -1,0 +1,20 @@
+{
+  "raw": {
+    "Shipping Fee Charged by Logistic": "đ120.500",
+    "Refund Amount": "-đ205.148",
+    "Shipping Fee Rebate From": "-đ120.500",
+    "Product Discount Rebate from Shopee": "",
+    "Voucher Sponsored by Seller": "đ13.475",
+    "Commission Fee": "937.636",
+    "Service Fee": "đ13.241"
+  },
+  "corrected": {
+    "Shipping Fee Charged by Logistic": "đ120.500",
+    "Refund Amount": "-đ205.148",
+    "Shipping Fee Rebate From": "-đ120.500",
+    "Product Discount Rebate from Shopee": "",
+    "Voucher Sponsored by Seller": "đ13.475",
+    "Commission Fee": "937.636",
+    "Service Fee": "đ13.241"
+  }
+}

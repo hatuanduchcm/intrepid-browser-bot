@@ -1,0 +1,104 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'version.txt'   # chỉ trigger khi tăng version
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read version
+        id: ver
+        shell: pwsh
+        run: |
+          $v = (Get-Content version.txt).Trim()
+          echo "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'   # 3.11 stable, works with all deps
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: pip-
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pillow
+
+      - name: Cache Tesseract installer
+        id: cache-tess
+        uses: actions/cache@v4
+        with:
+          path: C:\tess-cache
+          key: tesseract-5.5.0.20241111
+
+      - name: Download Tesseract installer
+        if: steps.cache-tess.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force C:\tess-cache | Out-Null
+          Invoke-WebRequest -Uri "https://github.com/UB-Mannheim/tesseract/releases/download/v5.5.0.20241111/tesseract-ocr-w64-setup-5.5.0.20241111.exe" `
+            -OutFile "C:\tess-cache\tesseract-setup.exe"
+
+      - name: Install Tesseract
+        shell: pwsh
+        run: |
+          Start-Process "C:\tess-cache\tesseract-setup.exe" -ArgumentList "/S", "/D=C:\Program Files\Tesseract-OCR" -Wait
+          echo "C:\Program Files\Tesseract-OCR" >> $env:GITHUB_PATH
+
+      - name: Build icon
+        shell: pwsh
+        run: python make_icon.py
+        continue-on-error: true   # icon lỗi vẫn build tiếp
+
+      - name: Build EXE (onedir)
+        shell: pwsh
+        run: |
+          $iconFlag = ""
+          if (Test-Path "assets\app_icon.ico") { $iconFlag = "--icon=assets\app_icon.ico" }
+          pyinstaller `
+            --noconfirm `
+            --onedir `
+            --windowed `
+            --name "InvoiceAdjustmentBot" `
+            $iconFlag `
+            --add-data "assets;assets" `
+            --add-data "locales;locales" `
+            --add-data "version.txt;." `
+            --add-data ".env.example;." `
+            --add-data "C:\Program Files\Tesseract-OCR;Tesseract-OCR" `
+            --hidden-import "PIL._tkinter_finder" `
+            gui_app.py
+
+      - name: Zip output
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist\InvoiceAdjustmentBot\* `
+            -DestinationPath InvoiceAdjustmentBot.zip
+
+      - name: Create GitHub Release (dist repo)
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: hatuanduc/intrepid-browser-bot-dist
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: v${{ steps.ver.outputs.version }}
+          body: |
+            Auto-release từ commit ${{ github.sha }}
+          files: InvoiceAdjustmentBot.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.INTREPID_BROWSER_BOT_DIST_RELEASE_TOKEN }}
