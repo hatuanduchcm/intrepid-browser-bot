@@ -1014,7 +1014,17 @@ class BotApp(tk.Tk):
             self._stat_errors.append(ev)
             order_id = ev.get('order_id', '?')
             venture  = ev.get('venture', '')
-            tag = f"  {order_id}" + (f"  ({venture})" if venture else "")
+            brand    = ev.get('brand', '')
+            error    = ev.get('error', '')
+            # Shorten error to first 40 chars for display
+            err_short = error[:40].rstrip() + ('…' if len(error) > 40 else '') if error else ''
+            parts = []
+            if venture:
+                parts.append(venture)
+            if brand:
+                parts.append(brand)
+            prefix = f"[{' | '.join(parts)}] " if parts else ""
+            tag = f"  {prefix}{order_id}" + (f"  — {err_short}" if err_short else "")
             self._error_listbox.insert(tk.END, tag)
             if len(self._stat_errors) == 1:
                 # show the error list frame for the first time

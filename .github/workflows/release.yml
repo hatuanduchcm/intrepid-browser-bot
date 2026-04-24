@@ -9,6 +9,8 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
 
     steps:
       - name: Checkout
@@ -91,12 +93,30 @@ jobs:
           Compress-Archive -Path dist\InvoiceAdjustmentBot\* `
             -DestinationPath InvoiceAdjustmentBot.zip
 
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: InvoiceAdjustmentBot
+          path: InvoiceAdjustmentBot.zip
+          retention-days: 1
+
+  release:
+    runs-on: windows-latest
+    needs: build
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: InvoiceAdjustmentBot
+
       - name: Create GitHub Release (dist repo)
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.INTREPID_BROWSER_BOT_DIST_RELEASE_TOKEN }}
         run: |
-          $tag = "v${{ steps.ver.outputs.version }}"
+          $ErrorActionPreference = 'Continue'
+          $tag = "v${{ needs.build.outputs.version }}"
           $repo = "hatuanduc/intrepid-browser-bot-dist"
           # Delete existing release+tag if present (idempotent re-run)
           $exists = gh release view $tag --repo $repo 2>&1

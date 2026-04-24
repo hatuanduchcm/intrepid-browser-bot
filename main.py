@@ -60,6 +60,7 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
     items.sort(key=_sort_key)
     for order_id, meta in items:
         venture = ''  # ensure defined in except block
+        brand = ''    # ensure defined in except block
         try:
             logger.info('─' * 60)
             logger.info('[%s] Start — row %s', order_id, meta.get('index'))
@@ -98,7 +99,7 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
                 except Exception as e:
                     logger.error('[%s] ERROR — Login thất bại cho %s: %s', order_id, venture, e)
                     login_failed_ventures.add(venture)
-                    _stat('error', order_id=order_id, venture=venture,
+                    _stat('error', order_id=order_id, venture=venture, brand=brand,
                           error=f'Login thất bại: {e}',
                           crop_path=_screenshot_error(order_id, venture, 'login_failed'))
                     continue
@@ -111,14 +112,14 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
                     found = handle_search_brand_event({'brand': brand})
                     if not found:
                         logger.error('[%s] ERROR — Brand not found: %s', order_id, brand)
-                        _stat('error', order_id=order_id, venture=venture,
+                        _stat('error', order_id=order_id, venture=venture, brand=brand,
                               error=f'Brand không tìm thấy: {brand}',
                               crop_path=_screenshot_error(order_id, venture, 'brand_not_found'))
                         continue
                     logger.info('[%s] Brand found: %s', order_id, brand)
                 except Exception as e:
                     logger.error('[%s] ERROR — Brand search exception: %s', order_id, e)
-                    _stat('error', order_id=order_id, venture=venture,
+                    _stat('error', order_id=order_id, venture=venture, brand=brand,
                           error=f'Brand search lỗi: {e}',
                           crop_path=_screenshot_error(order_id, venture, 'brand_search_exc'))
                     continue
@@ -129,7 +130,7 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
 
             if not result.get('opened'):
                 logger.error('[%s] ERROR — Order page không mở được', order_id)
-                _stat('error', order_id=order_id, venture=venture,
+                _stat('error', order_id=order_id, venture=venture, brand=brand,
                       error='Không mở được trang order',
                       crop_path=_screenshot_error(order_id, venture, 'order_not_opened'))
                 continue
@@ -137,7 +138,7 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
             adj = result.get('adjustment_text')
             if adj is None:
                 logger.error('[%s] ERROR — Không tìm thấy adjustment data', order_id)
-                _stat('error', order_id=order_id, venture=venture,
+                _stat('error', order_id=order_id, venture=venture, brand=brand,
                       error='Không tìm thấy adjustment data',
                       crop_path=_screenshot_error(order_id, venture, 'no_adjustment'), ocr_lines=[])
                 continue
@@ -159,7 +160,7 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
                 got = check.get('total_value')
                 logger.error('[%s] ERROR — Total mismatch: expected %s, sum of items %s', order_id, exp, got)
                 _shot = _screenshot_error(order_id, venture, 'total_mismatch')
-                _stat('error', order_id=order_id, venture=venture,
+                _stat('error', order_id=order_id, venture=venture, brand=brand,
                       error=f'Total không khớp: expected {exp}, sum={got}',
                       crop_path=_crop_path or _shot, ocr_lines=_ocr_lines)
                 continue
@@ -182,7 +183,7 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
                 logger.error('[%s] ERROR — Không build được updates từ adj: %s', order_id,
                              {str(k): v for k, v in adj.items() if not str(k).startswith('__')} if isinstance(adj, dict) else adj)
                 _shot = _screenshot_error(order_id, venture, 'no_updates')
-                _stat('error', order_id=order_id, venture=venture,
+                _stat('error', order_id=order_id, venture=venture, brand=brand,
                       error='Không có data để ghi lên gsheet',
                       crop_path=_crop_path or _shot, ocr_lines=_ocr_lines)
                 continue
@@ -192,11 +193,11 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
             try:
                 update_columns_for_order(sheet_id, sheet_name, order_id, updates)
                 logger.info('[%s] SUCCESS — gsheet updated: %s', order_id, updates)
-                _stat('success', order_id=order_id, venture=venture)
+                _stat('success', order_id=order_id, venture=venture, brand=brand)
             except Exception as e:
                 logger.exception('[%s] ERROR — gsheet update failed: %s', order_id, e)
                 _shot = _screenshot_error(order_id, venture, 'gsheet_fail')
-                _stat('error', order_id=order_id, venture=venture,
+                _stat('error', order_id=order_id, venture=venture, brand=brand,
                       error=f'gsheet update failed: {e}',
                       crop_path=_crop_path or _shot, ocr_lines=_ocr_lines)
 
@@ -205,7 +206,7 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
             _shot = _screenshot_error(order_id, venture, 'exception')
             _ecrop = str(_rc) if _rc.exists() else _shot
             logger.exception('[%s] EXCEPTION: %s', order_id, e)
-            _stat('error', order_id=order_id, venture=venture,
+            _stat('error', order_id=order_id, venture=venture, brand=brand,
                   error=str(e), crop_path=_ecrop, ocr_lines=[])
 
     # Logout after all orders processed
