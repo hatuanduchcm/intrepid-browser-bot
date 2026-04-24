@@ -50,6 +50,7 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
 
     # 2) iterate — sort by venture first, then brand to group logins together
     last_venture = None
+    login_failed_ventures: set = set()   # ventures where login failed — skip all orders for these
     items = list(mapping.items())
     def _sort_key(item):
         _, meta = item
@@ -78,6 +79,13 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
             venture = (meta.get('Venture') or meta.get('venture') or '').strip().upper()
             logger.info('[%s] Venture: %s', order_id, venture)
 
+            # ── Skip venture với login đã fail trước đó ──────────────────
+            if venture and venture in login_failed_ventures:
+                logger.error('[%s] SKIP — Login đã thất bại cho venture %s, bỏ qua order này', order_id, venture)
+                _stat('error', order_id=order_id, venture=venture,
+                      error=f'Login thất bại cho venture {venture} (bỏ qua)')
+                continue
+
             # ── Login / re-login ──────────────────────────────────────────
             if venture and venture != last_venture:
                 try:
@@ -88,7 +96,12 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
                     handle_login_event({'venture': venture})
                     last_venture = venture
                 except Exception as e:
-                    logger.warning('[%s] Login failed for %s: %s', order_id, venture, e)
+                    logger.error('[%s] ERROR — Login thất bại cho %s: %s', order_id, venture, e)
+                    login_failed_ventures.add(venture)
+                    _stat('error', order_id=order_id, venture=venture,
+                          error=f'Login thất bại: {e}',
+                          crop_path=_screenshot_error(order_id, venture, 'login_failed'))
+                    continue
 
             # ── Brand search ──────────────────────────────────────────────
             brand = meta.get('Brand Name') or meta.get('Brand')
