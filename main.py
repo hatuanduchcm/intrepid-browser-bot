@@ -100,6 +100,13 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
         except Exception as e:
             logger.exception('Processing failed for order %s: %s', order_id, e)
 
+    # Logout after all orders processed
+    try:
+        logger.info('All orders done — logging out')
+        handle_logout()
+    except Exception as e:
+        logger.warning('Logout failed: %s', e)
+
     logger.info('Batch processing complete')
 
 import logging

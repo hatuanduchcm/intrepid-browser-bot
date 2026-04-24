@@ -1,56 +1,103 @@
 # Intrepid Browser Bot — Workflow Actions
 
-Goal: Tự động cập nhật các "điều chỉnh" trên từng Order trong Intrepid và đẩy kết quả lên Google Sheets.
+## Mục tiêu
+Tự động cập nhật "điều chỉnh" (adjustment) trên từng Order trong Intrepid và đẩy kết quả lên Google Sheets.
 
-Top-level flow (high-level):
-1. Fetch Order IDs from GSheet or API (TODO).
-2. For each Order ID:
-   a. Ensure IntrepidBrowser is open and logged in.
-   b. Open Order detail page (search by Order ID).
-   c. Locate "adjustment" information in the Order view.
-   d. Extract/copy adjustment details.
-   e. Post extracted info to Google Sheet (TODO).
-   f. Mark Order as processed and continue.
+---
 
-Modules (separated responsibilities):
-- `auth/`  : open Intrepid app + login automation
-- `orders/`: search for order, open order detail, navigation helpers
-- `scraper/`: extract adjustment info from Order view (UIA/dom/image/OCR)
-- `gsheet/`: placeholder for pushing results to Google Sheets (TODO)
-- `api/`  : placeholder to fetch order list via API key (TODO)
-- `utils/`: helpers (clipboard, screenshot, retry, logging)
+## Luồng chính
 
-Action list (detailed):
-- init
-  - start Intrepid if not running (Windows Search)
-  - focus window
-- auth/login
-  - fill username/password (from `.env`)
-  - submit and wait until dashboard loads
-- navigation
-  - open shop/branch selector and choose branch
-  - open search box, input Order ID, open result
-- extract
-  - find File/Invoice section
-  - hover/click cloud icon to reveal tooltip/metadata
-  - copy adjustment info from tooltip or read text nodes
-- publish
-  - write row to Google Sheet (sheet, orderid, adjustment text, timestamp)
-
-Error handling & retries
-- Retry login 2 times before abort.
-- If Order not found, log and continue.
-- If extraction fails, take screenshot and attach to log.
-
-Next steps (what I will implement first)
-1. Create module scaffold under `src/` with minimal functions.
-2. Implement `auth` POC to open app and login using pywinauto.
-3. Provide a small test driver CLI to run a single Order ID.
-
-Run instructions (dev)
-```powershell
-python -m pip install -r requirements.txt
-python -m src.cli --order 123456
+```
+GUI khởi động (gui_app.py)
+  ├─ Check update ngầm từ GitHub Releases
+  │    └─ Có bản mới → download ngầm → hiện banner "Cập nhật sẵn sàng"
+  │         └─ User click → updater.bat chạy sau khi app thoát → restart
+  │
+  └─ User nhấn ▶ Run
+       ├─ Đọc Sheet ID, Sheet Name, SA JSON từ UI (lưu vào .env)
+       ├─ Spawn bot process (multiprocessing)
+       │    1. Fetch danh sách Order từ Google Sheet (nhóm theo Venture)
+       │    2. Với mỗi Venture:
+       │         a. Login Intrepid bằng tài khoản của Venture đó (auth/)
+       │         b. Với mỗi Order trong Venture:
+       │              i.  Mở Order detail (search by ID)
+       │              ii. Tìm section điều chỉnh
+       │              iii.OCR / extract adjustment value
+       │              iv. Ghi kết quả lên Google Sheet
+       │              v.  Đánh dấu processed
+       │         c. Logout khỏi Venture sau khi xong toàn bộ order
+       │    3. Hoàn thành tất cả Venture
+       └─ User nhấn ⏸ Stop → terminate process ngay lập tức
 ```
 
-Reply with: which module to implement first (auth/navigation/scraper/api/gsheet). I will implement that module next.
+---
+
+## Modules
+
+| Thư mục | Trách nhiệm |
+|---|---|
+| `auth/` | Mở Intrepid, login (email → password → 2FA), logout |
+| `brand/` | Tìm kiếm brand, chọn kết quả |
+| `order/` | Mở Order theo ID, tìm điều chỉnh, copy adjustment |
+| `gsheets/` | Đọc danh sách Order, ghi kết quả lên Sheet |
+| `utils/` | OCR, amounts, window, clipboard, 2FA cache |
+
+---
+
+## GUI (gui_app.py)
+
+- **Dark / Light theme** — lưu vào `.env` (`GUI_THEME`)
+- **VI / EN language** — lưu vào `.env` (`GUI_LANG`), locale files tại `locales/`
+- **Status indicator** — đèn nhấp nháy khi running, tĩnh khi idle/done/stopped
+- **Log area** — màu theo level (ERROR/WARNING/INFO/DEBUG)
+- **Auto-update** — check `hatuanduc/intrepid-browser-bot-dist` khi khởi động
+
+---
+
+## Auto-update flow
+
+```
+Developer:
+  1. Sửa code
+  2. Tăng version trong version.txt (vd: 1.0.0 → 1.0.1)
+  3. git commit + git push → GitHub Actions tự động:
+       - Build EXE (Windows runner, Python 3.11)
+       - Bundle Tesseract-OCR 5.5
+       - Nén → InvoiceAdjustmentBot.zip
+       - Publish release lên hatuanduc/intrepid-browser-bot-dist
+
+User (máy khác):
+  - Mở app → check API → thấy version mới
+  - Download ZIP ngầm → xong hiện banner xanh
+  - Click banner → app thoát → iab_updater.bat giải nén đè → restart
+```
+
+---
+
+## Build local (dev)
+
+```bat
+build_exe.bat
+```
+Output: `dist\InvoiceAdjustmentBot\`
+
+---
+
+## Cấu hình (.env)
+
+```env
+GSHEET_ID=...
+GSHEET_SHEET_NAME=...
+GOOGLE_SERVICE_ACCOUNT_PATH=key/order-adjustment-bot.json
+GUI_THEME=dark
+GUI_LANG=vi
+```
+
+---
+
+## Error handling
+
+- Login thất bại → retry 2 lần → dừng
+- Order không tìm thấy → log + tiếp tục order kế
+- OCR thất bại → screenshot đính kèm log
+- Update thất bại (offline/API lỗi) → bỏ qua, app chạy bình thường
