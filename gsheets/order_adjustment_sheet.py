@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 
 # store last opened Worksheet for external inspection/tests
 LAST_WORKSHEET = None
+# cached header map {lowercase_header: col_number} to avoid re-fetching every update
+LAST_HEADER_MAP: Dict[str, int] = {}
 
 # New structured adjustment column definitions.
 class ColumnCategory(Enum):
@@ -47,6 +49,9 @@ class ColumnName(Enum):
     COFUND_VOUCHER_SPONSORED_BY_SELLER = 'COFUND_VOUCHER_SPONSORED_BY_SELLER'
     TOTAL_ADJUSTMENT_AMOUNT = 'TOTAL_ADJUSTMENT_AMOUNT'
     REFUND_COMPENSATION = 'REFUND_COMPENSATION'
+    PARCEL_LOST_COMPENSATION = 'PARCEL_LOST_COMPENSATION'
+    LOGISTICS_RELATED_ADJUSTMENT = 'LOGISTICS_RELATED_ADJUSTMENT'
+    OTHERS = 'OTHERS'
 
 
 # Simplified mappings requested: two separate maps
@@ -79,6 +84,9 @@ ADJUSTMENT_COLUMNS = {
     ColumnName.GAP: ["Gap"],
     ColumnName.TOTAL_ADJUSTMENT_AMOUNT: ["Total Adjustment Amount"],
     ColumnName.REFUND_COMPENSATION: ["Grace Period Return/Refund Compensation", "Return/Refund Compensation", "Refund Compensation"],
+    ColumnName.PARCEL_LOST_COMPENSATION: ["Compensation as Parcel was Lost"],
+    ColumnName.LOGISTICS_RELATED_ADJUSTMENT: ["Logistics Related Adjustment"],
+    ColumnName.OTHERS: ["Others"],
 }
 
 # Map ColumnName -> GSheet header text
@@ -109,6 +117,9 @@ GSHEET_COLUMN = {
     ColumnName.COFUND_VOUCHER_SPONSORED_BY_SELLER: "Cofund Voucher Sponsored by Seller",
     ColumnName.TOTAL_ADJUSTMENT_AMOUNT: "Total Adjustment Amount",
     ColumnName.REFUND_COMPENSATION: "Refund Compensation",
+    ColumnName.PARCEL_LOST_COMPENSATION: "Compensation as Parcel was Lost",
+    ColumnName.LOGISTICS_RELATED_ADJUSTMENT: "Logistics Related Adjustment",
+    ColumnName.OTHERS: "Others",
 }
 
 def find_columnname_by_shopee_label(label: str) -> Union[ColumnName, None]:
@@ -152,9 +163,46 @@ def map_adjustment_keys_to_columns(sheet_id: str, sheet_name: str) -> Dict[str, 
 # Build from GSHEET_COLUMN mapping (ColumnName -> header string)
 ADJUSTMENT_COLUMN_KEYS = [v for v in GSHEET_COLUMN.values()]
 
+# Path for caching the OAuth2 access token between subprocess runs (valid ~1 hour)
+_TOKEN_CACHE_PATH = Path(__file__).resolve().parents[1] / 'assets' / '.gauth_token.json'
+
+
+def _apply_token_cache(creds):
+    """Restore cached access token to skip the oauth2.googleapis.com round-trip."""
+    import json as _j, datetime
+    try:
+        if _TOKEN_CACHE_PATH.exists():
+            c = _j.loads(_TOKEN_CACHE_PATH.read_text(encoding='utf-8'))
+            token = c.get('token')
+            expiry_str = c.get('expiry')
+            if token and expiry_str:
+                expiry = datetime.datetime.fromisoformat(expiry_str)
+                # Use cached token only if valid for at least 5 more minutes
+                if expiry > datetime.datetime.utcnow() + datetime.timedelta(minutes=5):
+                    creds.token = token
+                    creds._expiry = expiry
+                    logger.debug('OAuth2: using cached token (expires %s)', expiry_str)
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def _save_token_cache(creds):
+    """Persist the current access token so future subprocess starts can reuse it."""
+    import json as _j
+    try:
+        if creds.token and creds.expiry:
+            _TOKEN_CACHE_PATH.write_text(
+                _j.dumps({'token': creds.token, 'expiry': creds.expiry.isoformat()}),
+                encoding='utf-8',
+            )
+    except Exception:
+        pass
+
 
 def _open_sheet(sheet_id: str, sheet_name: str):
-    global LAST_WORKSHEET
+    global LAST_WORKSHEET, LAST_HEADER_MAP
     # If a LAST_WORKSHEET was set earlier, reuse it only when its title matches
     if LAST_WORKSHEET is not None:
         try:
@@ -181,8 +229,15 @@ def _open_sheet(sheet_id: str, sheet_name: str):
         logger.error('Failed to load service account credentials from GOOGLE_SERVICE_ACCOUNT_PATH: %s', e)
         raise
 
-    gc = gspread.authorize(creds)
+    # Restore cached token to avoid POST to oauth2.googleapis.com when token still valid
+    _apply_token_cache(creds)
+
+    gc = gspread.Client(auth=creds)
     sh = gc.open_by_key(sheet_id)
+
+    # Save token after first successful API call (token is now populated)
+    _save_token_cache(creds)
+
     worksheet = sh.worksheet(sheet_name)
     try:
         LAST_WORKSHEET = worksheet
@@ -191,7 +246,7 @@ def _open_sheet(sheet_id: str, sheet_name: str):
     return worksheet
 
 
-def update_columns_for_order(sheet_id: str, sheet_name: str, order_id: str, updates: Dict[str, str]):
+def update_columns_for_order(sheet_id: str, sheet_name: str, order_id: str, updates: Dict[str, str], row_number: int = None):
     """
     Find the row that contains `order_id` in any of the columns (Order ID column) and update
     the given columns by header name with values from `updates`.
@@ -205,11 +260,14 @@ def update_columns_for_order(sheet_id: str, sheet_name: str, order_id: str, upda
     except Exception:
         raise
 
-    # Read header row
-    header = worksheet.row_values(1)
-    # case-insensitive map: lowercase key -> col number; keep original for a1 lookup
-    header_map_lower = {h.strip().lower(): i + 1 for i, h in enumerate(header)}
-    header_map = {h: i + 1 for i, h in enumerate(header)}  # original-case map (for logging)
+    # Use cached header map if available (populated by _open_sheet), else fetch once
+    global LAST_HEADER_MAP
+    if LAST_HEADER_MAP:
+        header_map_lower = LAST_HEADER_MAP
+    else:
+        header = worksheet.row_values(1)
+        header_map_lower = {h.strip().lower(): i + 1 for i, h in enumerate(header)}
+        LAST_HEADER_MAP = header_map_lower
 
     # Validate requested columns exist
     # Ensure we push all known GSHEET columns on every update (not only those with values)
@@ -224,23 +282,19 @@ def update_columns_for_order(sheet_id: str, sheet_name: str, order_id: str, upda
     if missing:
         logger.warning('Requested update columns missing in sheet: %s', missing)
 
-    # Find the row with order_id
-    try:
-        # Try to find exact match in the sheet (search entire sheet)
-        cell = worksheet.find(order_id)
-        row_number = cell.row
-    except Exception:
-        # fallback: scan the column(s) where Order ID likely is
-        # Try to locate any header that contains 'order id'
-        order_cols = [name for name in header if 'order' in name.lower() and 'id' in name.lower()]
-        row_number = None
-        if order_cols:
-            col = header_map[order_cols[0]]
-            col_values = worksheet.col_values(col)
-            for idx, val in enumerate(col_values, start=1):
-                if val.strip() == order_id:
-                    row_number = idx
-                    break
+    # Use provided row_number (from extract_order_index_map) to skip worksheet.find()
+    if not row_number:
+        try:
+            cell = worksheet.find(order_id)
+            row_number = cell.row
+        except Exception:
+            order_col = next((v for k, v in header_map_lower.items() if 'order' in k and 'id' in k), None)
+            if order_col:
+                col_values = worksheet.col_values(order_col)
+                for idx, val in enumerate(col_values, start=1):
+                    if val.strip() == order_id:
+                        row_number = idx
+                        break
         if not row_number:
             raise RuntimeError('Order ID not found in sheet')
 
@@ -288,55 +342,84 @@ def extract_order_index_map(sheet_id: str, sheet_name: str, output_path: str = N
     và sinh dict mapping order_id -> { 'index': row_number, 'Venture': ..., 'Brand Name': ..., 'Platform': ... }
     Nếu `output_path` được cung cấp, lưu kết quả dưới dạng JSON tại đó.
     Trả về dict đã tạo.
+
+    Chỉ fetch các cột cần thiết qua batch_get (thay vì get_all_values() toàn bộ sheet)
+    để giảm lượng data transfer — quan trọng khi sheet có nhiều cột.
     """
     import json
 
     worksheet = _open_sheet(sheet_id, sheet_name)
-    header = worksheet.row_values(1)
-    # tìm các cột quan tâm (phù hợp không phân biệt hoa thường)
-    def find_col(name_variants):
-        for i, h in enumerate(header, start=1):
-            if any(v.lower() == h.strip().lower() for v in name_variants):
-                return i
-        return None
+    # LAST_HEADER_MAP đã được cache bởi _open_sheet; dùng lại để tránh gọi row_values(1) thêm
+    global LAST_HEADER_MAP
+    if LAST_HEADER_MAP:
+        header = list(LAST_HEADER_MAP.keys())   # lowercase keys; chỉ dùng để tìm vị trí cột
+        def find_col(name_variants):
+            for name in name_variants:
+                col = LAST_HEADER_MAP.get(name.strip().lower())
+                if col:
+                    return col
+            return None
+    else:
+        header_row = worksheet.row_values(1)
+        def find_col(name_variants):
+            for i, h in enumerate(header_row, start=1):
+                if any(v.lower() == h.strip().lower() for v in name_variants):
+                    return i
+            return None
 
-    venture_col = find_col(['Venture'])
-    brand_col = find_col(['Platform'])
-    platform_col = find_col(['Platform'])
-    order_col = find_col(['Order ID', 'OrderID', 'Order'])
+    venture_col    = find_col(['Venture'])
+    platform_col   = find_col(['Platform'])
+    order_col      = find_col(['Order ID', 'OrderID', 'Order'])
     total_check_col = find_col(['Total check', 'Total Check', 'TotalCheck'])
 
     if not order_col:
         raise RuntimeError('Could not find Order ID column in header')
 
+    def _col_letter(n: int) -> str:
+        """Convert 1-based column number to A1 letter (e.g. 1→A, 27→AA)."""
+        result = ''
+        while n:
+            n, r = divmod(n - 1, 26)
+            result = chr(65 + r) + result
+        return result
+
+    # Fetch only the 4 needed columns — vastly smaller than get_all_values()
+    needed = {c: lbl for c, lbl in [
+        (venture_col,     'Venture'),
+        (platform_col,    'Platform'),
+        (order_col,       'Order ID'),
+        (total_check_col, 'Total check'),
+    ] if c}
+
+    sorted_cols = sorted(needed.keys())
+    ranges = [f'{_col_letter(c)}:{_col_letter(c)}' for c in sorted_cols]
+    logger.debug('extract_order_index_map: batch_get ranges=%s', ranges)
+    batch = worksheet.batch_get(ranges)
+
+    # batch[i] → list of [value] per row for sorted_cols[i]
+    col_data: Dict[int, List[str]] = {}
+    for i, col_num in enumerate(sorted_cols):
+        raw = batch[i] if i < len(batch) else []
+        col_data[col_num] = [row[0] if row else '' for row in raw]
+
+    max_rows = max((len(v) for v in col_data.values()), default=0)
+
+    def _get(col, row_idx):
+        vals = col_data.get(col, [])
+        return vals[row_idx].strip() if row_idx < len(vals) else ''
+
     data_map = {}
-    # read all rows in needed columns to speed up
-    col_indices = [c for c in [venture_col, brand_col, platform_col, order_col] if c]
-    max_row = worksheet.row_count
-    # read as a rectangular range from row 2 to last used row
-    rows = worksheet.get_all_values()
-    for idx, row in enumerate(rows[1:], start=2):
+    for row_idx in range(1, max_rows):     # index 0 = header row → skip
         try:
-            order_id = row[order_col - 1].strip() if len(row) >= order_col else ''
+            order_id = _get(order_col, row_idx)
             if not order_id:
                 continue
-            entry = {'index': idx}
-            if venture_col and len(row) >= venture_col:
-                entry['Venture'] = row[venture_col - 1].strip()
-            else:
-                entry['Venture'] = ''
-            if brand_col and len(row) >= brand_col:
-                entry['Brand Name'] = row[brand_col - 1].strip()
-            else:
-                entry['Brand Name'] = ''
-            if platform_col and len(row) >= platform_col:
-                entry['Platform'] = row[platform_col - 1].strip()
-            else:
-                entry['Platform'] = ''
-            if total_check_col and len(row) >= total_check_col:
-                entry['Total check'] = row[total_check_col - 1].strip()
-            else:
-                entry['Total check'] = ''
+            entry = {
+                'index':       row_idx + 1,   # 1-based gsheet row number
+                'Venture':     _get(venture_col,     row_idx) if venture_col     else '',
+                'Platform':    _get(platform_col,    row_idx) if platform_col    else '',
+                'Total check': _get(total_check_col, row_idx) if total_check_col else '',
+            }
             data_map[order_id] = entry
         except Exception:
             continue
@@ -347,6 +430,7 @@ def extract_order_index_map(sheet_id: str, sheet_name: str, output_path: str = N
         with out_p.open('w', encoding='utf-8') as f:
             json.dump(data_map, f, ensure_ascii=False, indent=2)
 
+    logger.info('extract_order_index_map: loaded %d orders', len(data_map))
     return data_map
 
 

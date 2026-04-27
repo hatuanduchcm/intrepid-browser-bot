@@ -45,22 +45,32 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
             logger.debug('[%s] Failed to capture error screenshot: %s', order_id, e)
             return None
 
+    def _latest_debug_image() -> str | None:
+        """Return the most recently saved adjustment debug image (area capture or popup crop)."""
+        candidates = [
+            *_debug_dir.glob('adjustment_area_*.png'),
+            *_debug_dir.glob('popup_crop_*.png'),
+        ]
+        if not candidates:
+            return None
+        return str(max(candidates, key=lambda p: p.stat().st_mtime))
+
     mapping = extract_order_index_map(sheet_id, sheet_name, output_path=orders_sheet_path)
     logger.info('Found %d orders to process', len(mapping))
 
-    # 2) iterate — sort by venture first, then brand to group logins together
+    # 2) iterate — sort by venture first, then platform to group logins together
     last_venture = None
     login_failed_ventures: set = set()   # ventures where login failed — skip all orders for these
     items = list(mapping.items())
     def _sort_key(item):
         _, meta = item
         v = meta.get('Venture') or meta.get('venture') or ''
-        b = meta.get('Brand Name') or meta.get('Brand') or ''
+        b = meta.get('Platform') or ''
         return (str(v).strip().upper(), str(b).strip().lower())
     items.sort(key=_sort_key)
     for order_id, meta in items:
         venture = ''  # ensure defined in except block
-        brand = ''    # ensure defined in except block
+        platform = ''  # ensure defined in except block
         try:
             logger.info('─' * 60)
             logger.info('[%s] Start — row %s', order_id, meta.get('index'))
@@ -99,38 +109,38 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
                 except Exception as e:
                     logger.error('[%s] ERROR — Login thất bại cho %s: %s', order_id, venture, e)
                     login_failed_ventures.add(venture)
-                    _stat('error', order_id=order_id, venture=venture, brand=brand,
+                    _stat('error', order_id=order_id, venture=venture, brand=platform,
                           error=f'Login thất bại: {e}',
                           crop_path=_screenshot_error(order_id, venture, 'login_failed'))
                     continue
 
-            # ── Brand search ──────────────────────────────────────────────
-            brand = meta.get('Brand Name') or meta.get('Brand')
-            if brand:
+            # ── Platform search ──────────────────────────────────────────────
+            platform = meta.get('Platform')
+            if platform:
                 try:
-                    logger.info('[%s] Searching brand: %s', order_id, brand)
-                    found = handle_search_brand_event({'brand': brand})
+                    logger.info('[%s] Searching platform: %s', order_id, platform)
+                    found = handle_search_brand_event({'brand': platform})
                     if not found:
-                        logger.error('[%s] ERROR — Brand not found: %s', order_id, brand)
-                        _stat('error', order_id=order_id, venture=venture, brand=brand,
-                              error=f'Brand không tìm thấy: {brand}',
-                              crop_path=_screenshot_error(order_id, venture, 'brand_not_found'))
+                        logger.error('[%s] ERROR — Platform not found: %s', order_id, platform)
+                        _stat('error', order_id=order_id, venture=venture, brand=platform,
+                              error=f'Platform không tìm thấy: {platform}',
+                              crop_path=_screenshot_error(order_id, venture, 'platform_not_found'))
                         continue
-                    logger.info('[%s] Brand found: %s', order_id, brand)
+                    logger.info('[%s] Platform found: %s', order_id, platform)
                 except Exception as e:
-                    logger.error('[%s] ERROR — Brand search exception: %s', order_id, e)
-                    _stat('error', order_id=order_id, venture=venture, brand=brand,
-                          error=f'Brand search lỗi: {e}',
-                          crop_path=_screenshot_error(order_id, venture, 'brand_search_exc'))
+                    logger.error('[%s] ERROR — Platform search exception: %s', order_id, e)
+                    _stat('error', order_id=order_id, venture=venture, brand=platform,
+                          error=f'Platform search lỗi: {e}',
+                          crop_path=_screenshot_error(order_id, venture, 'platform_search_exc'))
                     continue
 
             # ── Order flow ────────────────────────────────────────────────
             logger.info('[%s] Opening order page …', order_id)
-            result = handle_order_flow_event({'order_id': order_id, 'brand': brand, 'venture': venture})
+            result = handle_order_flow_event({'order_id': order_id, 'brand': platform, 'venture': venture})
 
             if not result.get('opened'):
                 logger.error('[%s] ERROR — Order page không mở được', order_id)
-                _stat('error', order_id=order_id, venture=venture, brand=brand,
+                _stat('error', order_id=order_id, venture=venture, brand=platform,
                       error='Không mở được trang order',
                       crop_path=_screenshot_error(order_id, venture, 'order_not_opened'))
                 continue
@@ -138,20 +148,16 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
             adj = result.get('adjustment_text')
             if adj is None:
                 logger.error('[%s] ERROR — Không tìm thấy adjustment data', order_id)
-                _stat('error', order_id=order_id, venture=venture, brand=brand,
+                # prefer the debug image captured during adjustment search (shows the actual state)
+                _no_adj_crop = _latest_debug_image() or _screenshot_error(order_id, venture, 'no_adjustment')
+                _stat('error', order_id=order_id, venture=venture, brand=platform,
                       error='Không tìm thấy adjustment data',
-                      crop_path=_screenshot_error(order_id, venture, 'no_adjustment'), ocr_lines=[])
+                      crop_path=_no_adj_crop, ocr_lines=[])
                 continue
 
             # ── Gather debug artefacts ────────────────────────────────────
             _ocr_lines = adj.get('__ocr_lines__', []) if isinstance(adj, dict) else []
-            _rc = _debug_dir / f'return_compensation_{venture}_{order_id}.png'
-            if _rc.exists():
-                _crop_path = str(_rc)
-            else:
-                _pc = sorted(_debug_dir.glob('popup_crop_*.png'),
-                             key=lambda p: p.stat().st_mtime, reverse=True)
-                _crop_path = str(_pc[0]) if _pc else None
+            _crop_path = _latest_debug_image()
 
             # ── Total mismatch check ──────────────────────────────────────
             check = adj.get('__total_check__') if isinstance(adj, dict) else None
@@ -160,7 +166,7 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
                 got = check.get('total_value')
                 logger.error('[%s] ERROR — Total mismatch: expected %s, sum of items %s', order_id, exp, got)
                 _shot = _screenshot_error(order_id, venture, 'total_mismatch')
-                _stat('error', order_id=order_id, venture=venture, brand=brand,
+                _stat('error', order_id=order_id, venture=venture, brand=platform,
                       error=f'Total không khớp: expected {exp}, sum={got}',
                       crop_path=_crop_path or _shot, ocr_lines=_ocr_lines)
                 continue
@@ -183,7 +189,7 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
                 logger.error('[%s] ERROR — Không build được updates từ adj: %s', order_id,
                              {str(k): v for k, v in adj.items() if not str(k).startswith('__')} if isinstance(adj, dict) else adj)
                 _shot = _screenshot_error(order_id, venture, 'no_updates')
-                _stat('error', order_id=order_id, venture=venture, brand=brand,
+                _stat('error', order_id=order_id, venture=venture, brand=platform,
                       error='Không có data để ghi lên gsheet',
                       crop_path=_crop_path or _shot, ocr_lines=_ocr_lines)
                 continue
@@ -191,13 +197,13 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
             # ── Push to gsheet ────────────────────────────────────────────
             logger.info('[%s] Pushing to gsheet: %s', order_id, updates)
             try:
-                update_columns_for_order(sheet_id, sheet_name, order_id, updates)
+                update_columns_for_order(sheet_id, sheet_name, order_id, updates, row_number=meta.get('index'))
                 logger.info('[%s] SUCCESS — gsheet updated: %s', order_id, updates)
-                _stat('success', order_id=order_id, venture=venture, brand=brand)
+                _stat('success', order_id=order_id, venture=venture, brand=platform)
             except Exception as e:
                 logger.exception('[%s] ERROR — gsheet update failed: %s', order_id, e)
                 _shot = _screenshot_error(order_id, venture, 'gsheet_fail')
-                _stat('error', order_id=order_id, venture=venture, brand=brand,
+                _stat('error', order_id=order_id, venture=venture, brand=platform,
                       error=f'gsheet update failed: {e}',
                       crop_path=_crop_path or _shot, ocr_lines=_ocr_lines)
 
@@ -206,7 +212,7 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
             _shot = _screenshot_error(order_id, venture, 'exception')
             _ecrop = str(_rc) if _rc.exists() else _shot
             logger.exception('[%s] EXCEPTION: %s', order_id, e)
-            _stat('error', order_id=order_id, venture=venture, brand=brand,
+            _stat('error', order_id=order_id, venture=venture, brand=platform,
                   error=str(e), crop_path=_ecrop, ocr_lines=[])
 
     # Logout after all orders processed

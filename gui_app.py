@@ -594,6 +594,7 @@ class BotApp(tk.Tk):
                 self._play_pause_btn.configure(text=L.get("btn_resume", ""))
             else:
                 self._play_pause_btn.configure(text=L.get("btn_pause", ""))
+            self._stop_btn.configure(text=L.get("btn_stop", ""))
             self._btn_clear.configure(text=L.get("btn_clear_log", ""))
             self._settings_btn.configure(text="⚙  " + L.get("settings_dialog_title", "Settings"))
             self._log_lf.configure(text=L.get("section_log", ""))
@@ -956,6 +957,21 @@ class BotApp(tk.Tk):
         self._log_text.delete("1.0", tk.END)
         self._log_text.configure(state=tk.DISABLED)
 
+        # Also remove all files inside assets/debug_matches/
+        try:
+            import shutil
+            from pathlib import Path
+            debug_dir = Path(__file__).resolve().parent / 'assets' / 'debug_matches'
+            if debug_dir.is_dir():
+                for f in debug_dir.iterdir():
+                    try:
+                        if f.is_file():
+                            f.unlink()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
     def _append_log(self, message: str):
         self._log_text.configure(state=tk.NORMAL)
         # Derive tag from the level prefix produced by the log formatter
@@ -1180,7 +1196,8 @@ class BotApp(tk.Tk):
         ocr_box.pack(fill=tk.BOTH, expand=True)
         ocr_content = "\n".join(ocr_lines) if ocr_lines else "—"
         ocr_box.insert(tk.END, ocr_content)
-        ocr_box.configure(state=tk.DISABLED)
+        # Keep NORMAL so the user can select and Ctrl+C; block actual typing
+        ocr_box.bind("<Key>", lambda e: "break" if e.state & 0x4 == 0 else None)
 
     # ── Process suspend/resume (Windows) ─────────────────────────────────────
 
