@@ -51,7 +51,7 @@ python gui_app.py
 
 - Python 3.10+
 - Tesseract OCR đã cài: https://github.com/UB-Mannheim/tesseract/wiki
-- Tất cả dependencies đã cài (`pip install -r requirements.txt`)
+- Tất cả dependencies đã cài (`![alt text](image.png)`)
 
 ### Các bước build
 

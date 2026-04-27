@@ -105,7 +105,7 @@ class _QueueHandler(logging.Handler):
 
 
 # ── Bot subprocess entry point (must be at module level for pickling) ─────────
-def _bot_process_target(sheet_id: str, sheet_name: str, log_queue, project_root: str):
+def _bot_process_target(sheet_id: str, sheet_name: str, log_queue, project_root: str, stats_queue=None):
     """Runs the bot in a separate process so it can be terminated instantly."""
     import logging as _log
     from pathlib import Path as _Path
@@ -132,7 +132,7 @@ def _bot_process_target(sheet_id: str, sheet_name: str, log_queue, project_root:
     _os.environ["GSHEET_SHEET_NAME"] = sheet_name
 
     from main import run_batch_process
-    run_batch_process(sheet_id, sheet_name)
+    run_batch_process(sheet_id, sheet_name, stats_queue=stats_queue)
 
 
 # ── Theme definitions ─────────────────────────────────────────────────────────
@@ -183,6 +183,195 @@ THEMES = {
     },
 }
 
+# ── Settings Dialog ───────────────────────────────────────────────────────────
+
+class _SettingsDialog(tk.Toplevel):
+    """Modal dialog to view/edit important .env variables."""
+
+    # (env_key, locale_label_key, is_password, is_path, is_json)
+    _GSHEET_FIELDS = [
+        ('GSHEET_ID',                    'settings_label_sheet_id',   False, False, False),
+        ('GSHEET_SHEET_NAME',            'settings_label_sheet_name', False, False, False),
+        ('GOOGLE_SERVICE_ACCOUNT_PATH',  'settings_label_sa_json',    False, True,  False),
+    ]
+    _INTREPID_FIELDS = [
+        ('INTREPID_USER_TEMPLATE', 'settings_label_user_tpl', False, False, False),
+        ('INTREPID_PASS',          'settings_label_pass',     True,  False, False),
+    ]
+    _INTREPID_ID_FIELDS = [
+        ('INTREPID_USER_ID',  'settings_label_user_id',  False, False, False),
+        ('INTREPID_PASS_ID',  'settings_label_pass_id',  True,  False, False),
+    ]
+
+    def __init__(self, parent: 'BotApp'):
+        super().__init__(parent)
+        self._parent = parent
+        L = parent._locale
+        t = parent._theme
+
+        self.title(L.get('settings_dialog_title', 'Settings'))
+        self.configure(bg=t['bg'])
+        self.resizable(True, True)
+        self.minsize(720, 600)
+        self.grab_set()   # modal
+
+        self._vars:      dict[str, tk.StringVar] = {}
+        self._textareas: dict[str, tk.Text]      = {}  # for multiline JSON path
+        self._eye_btns:  dict[str, tk.Button]    = {}
+        self._show_pass: dict[str, bool]         = {}
+
+        # scrollable body
+        outer = tk.Frame(self, bg=t['bg'])
+        outer.pack(fill=tk.BOTH, expand=True)
+        canvas = tk.Canvas(outer, bg=t['bg'], highlightthickness=0)
+        vsb = ttk.Scrollbar(outer, orient='vertical', command=canvas.yview)
+        canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        body = tk.Frame(canvas, bg=t['bg'])
+        _body_id = canvas.create_window((0, 0), window=body, anchor='nw')
+        def _on_resize(e):
+            canvas.itemconfigure(_body_id, width=e.width)
+        canvas.bind('<Configure>', _on_resize)
+        body.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        # mouse-wheel scroll
+        def _on_mousewheel(e):
+            canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units')
+        canvas.bind_all('<MouseWheel>', _on_mousewheel)
+        self.bind('<Destroy>', lambda e: canvas.unbind_all('<MouseWheel>'))
+
+        body.columnconfigure(0, weight=1)
+
+        def _section(label_key):
+            lf = tk.LabelFrame(body, text=L.get(label_key, label_key),
+                               font=('Segoe UI', 10), bg=t['bg'],
+                               fg=t['settings_fg'], bd=1, relief=tk.GROOVE)
+            lf.pack(fill=tk.X, padx=12, pady=(0, 10))
+            lf.columnconfigure(1, weight=1)
+            return lf
+
+        def _add_field(frame, row, env_key, label_key, is_password, is_path, is_json=False):
+            tk.Label(frame, text=L.get(label_key, label_key),
+                     bg=t['bg'], fg=t['fg'],
+                     font=('Segoe UI', 9), anchor=tk.W,
+                     width=22).grid(row=row, column=0, sticky=tk.NW, padx=(8, 4), pady=6)
+
+            cell = tk.Frame(frame, bg=t['bg'])
+            cell.grid(row=row, column=1, sticky=tk.EW, padx=(0, 8), pady=6)
+            cell.columnconfigure(0, weight=1)
+
+            if is_path:
+                # multiline Text widget — accepts file path OR raw JSON content
+                txt = tk.Text(cell, height=6, wrap=tk.WORD,
+                              bg=t['entry_bg'], fg=t['fg'], insertbackground=t['fg'],
+                              relief=tk.FLAT, font=('Consolas', 9))
+                txt.insert('1.0', os.getenv(env_key, ''))
+                txt.grid(row=0, column=0, sticky=tk.EW)
+                self._textareas[env_key] = txt
+
+                def _browse(w=txt):
+                    from tkinter import filedialog
+                    path = filedialog.askopenfilename(
+                        title=L.get('browse_dialog_title', 'Select file'),
+                        filetypes=[('JSON files', '*.json'), ('All files', '*.*')]
+                    )
+                    if path:
+                        w.delete('1.0', tk.END)
+                        w.insert('1.0', path)
+                tk.Button(cell, text='…', command=_browse,
+                          bg=t['btn_neutral'], fg=t['btn_neu_fg'],
+                          relief=tk.FLAT, font=('Segoe UI', 9),
+                          padx=8, cursor='hand2').grid(row=0, column=1, sticky=tk.N, padx=(4, 0))
+            else:
+                var = tk.StringVar(value=os.getenv(env_key, ''))
+                self._vars[env_key] = var
+                entry = tk.Entry(
+                    cell, textvariable=var,
+                    show='•' if is_password else '',
+                    bg=t['entry_bg'], fg=t['fg'], insertbackground=t['fg'],
+                    relief=tk.FLAT, font=('Consolas', 9),
+                )
+                entry.grid(row=0, column=0, sticky=tk.EW)
+
+                if is_password:
+                    self._show_pass[env_key] = False
+                    def _toggle(ek=env_key, e=entry):
+                        self._show_pass[ek] = not self._show_pass[ek]
+                        e.configure(show='' if self._show_pass[ek] else '•')
+                        self._eye_btns[ek].configure(
+                            text='🙈' if self._show_pass[ek] else '👁')
+                    eye = tk.Button(cell, text='👁', command=_toggle,
+                                    bg=t['bg2'], fg=t['fg'], relief=tk.FLAT,
+                                    font=('Segoe UI', 10), padx=6, cursor='hand2')
+                    eye.grid(row=0, column=1, padx=(4, 0))
+                    self._eye_btns[env_key] = eye
+
+        # ── Section: Google Sheet ─────────────────────────────────────────────
+        gs = _section('settings_section_gsheet')
+        for i, (ek, lk, pw, fp, jj) in enumerate(self._GSHEET_FIELDS):
+            _add_field(gs, i, ek, lk, pw, fp, jj)
+
+        # ── Section: Intrepid Browser ─────────────────────────────────────────
+        ib = _section('settings_section_intrepid')
+        for i, (ek, lk, pw, fp, jj) in enumerate(self._INTREPID_FIELDS):
+            _add_field(ib, i, ek, lk, pw, fp, jj)
+
+        # ── Section: Intrepid ID (special) ────────────────────────────────────
+        ii = _section('settings_section_intrepid_id')
+        for i, (ek, lk, pw, fp, jj) in enumerate(self._INTREPID_ID_FIELDS):
+            _add_field(ii, i, ek, lk, pw, fp, jj)
+
+        # bottom padding inside scroll area
+        tk.Frame(body, bg=t['bg'], height=8).pack()
+
+        # ── Buttons (outside scroll) ──────────────────────────────────────────
+        btn_row = tk.Frame(self, bg=t['bg2'])
+        btn_row.pack(fill=tk.X, padx=0, pady=0)
+        tk.Button(btn_row, text=L.get('settings_btn_save', 'Save'),
+                  command=self._save,
+                  bg=t['accent'], fg=t['accent_fg'],
+                  font=('Segoe UI', 10, 'bold'),
+                  relief=tk.FLAT, padx=20, pady=8, cursor='hand2',
+                  ).pack(side=tk.LEFT, padx=16, pady=10)
+        tk.Button(btn_row, text=L.get('settings_btn_cancel', 'Cancel'),
+                  command=self.destroy,
+                  bg=t['btn_neutral'], fg=t['btn_neu_fg'],
+                  font=('Segoe UI', 10),
+                  relief=tk.FLAT, padx=20, pady=8, cursor='hand2',
+                  ).pack(side=tk.LEFT)
+
+        # center on parent
+        self.update_idletasks()
+        pw_x = parent.winfo_x() + (parent.winfo_width()  - self.winfo_width())  // 2
+        pw_y = parent.winfo_y() + (parent.winfo_height() - self.winfo_height()) // 2
+        self.geometry(f'800x640+{pw_x}+{pw_y}')
+
+    def _save(self):
+        all_fields = self._GSHEET_FIELDS + self._INTREPID_FIELDS + self._INTREPID_ID_FIELDS
+        for env_key, _, _, is_path, _ in all_fields:
+            if is_path and env_key in self._textareas:
+                val = self._textareas[env_key].get('1.0', tk.END).strip()
+            else:
+                val = self._vars.get(env_key, tk.StringVar()).get().strip()
+            os.environ[env_key] = val
+            try:
+                if _ENV_FILE.exists():
+                    set_key(str(_ENV_FILE), env_key, val)
+            except Exception:
+                pass
+        # sync sheet fields back to main window
+        try:
+            self._parent._sheet_id_var.set(os.getenv('GSHEET_ID', ''))
+            self._parent._sheet_name_var.set(os.getenv('GSHEET_SHEET_NAME', ''))
+            self._parent._sa_path_var.set(os.getenv('GOOGLE_SERVICE_ACCOUNT_PATH', ''))
+        except Exception:
+            pass
+        msg = self._parent._locale.get('settings_saved', 'Settings saved.')
+        messagebox.showinfo(
+            self._parent._locale.get('settings_dialog_title', 'Settings'), msg, parent=self)
+        self.destroy()
+
+
 # ── Main App ──────────────────────────────────────────────────────────────────
 
 class BotApp(tk.Tk):
@@ -205,6 +394,11 @@ class BotApp(tk.Tk):
         self._bot_process: mp.Process | None = None
         self._log_queue: queue.Queue = queue.Queue()
         self._proc_log_queue: mp.Queue = mp.Queue()
+        self._stats_queue: mp.Queue = mp.Queue()
+        # Order statistics (reset each run)
+        self._stat_skip: int = 0
+        self._stat_success: int = 0
+        self._stat_errors: list = []
 
         # Load saved theme preference (default: dark)
         saved_theme = os.getenv("GUI_THEME", "dark")
@@ -221,6 +415,7 @@ class BotApp(tk.Tk):
         self._current_status_key: str = "status_ready"
         self._blink_on: bool = False
         self._update_zip_path: str | None = None   # path to downloaded update ZIP
+        self._is_paused: bool = False
         self._build_ui()
         self._setup_logging()
         self._poll_log_queue()
@@ -273,15 +468,26 @@ class BotApp(tk.Tk):
                     w.configure(bg=t["bg"], fg=t["settings_fg"])
                 elif role == "lf_log":
                     w.configure(bg=t["bg"], fg=t["label_frame"])
+                elif role == "lf_stats":
+                    w.configure(bg=t["bg"], fg=t["label_frame"])
+                elif role == "lf_error_list":
+                    w.configure(bg=t["bg"], fg=t["log_error"])
                 elif role == "entry":
                     w.configure(bg=t["entry_bg"], fg=t["fg"], insertbackground=t["fg"])
                 elif role == "entry_frame":
                     w.configure(bg=t["bg"])
                 elif role == "btn_run":
-                    if self._bot_process and self._bot_process.is_alive():
-                        w.configure(bg=t["danger"], fg=t["danger_fg"])
+                    _running = bool(self._bot_process and self._bot_process.is_alive())
+                    if _running and not self._is_paused:
+                        w.configure(bg=t["log_warning"], fg="#1e1e2e")  # orange = pause
                     else:
-                        w.configure(bg=t["accent"], fg=t["accent_fg"])
+                        w.configure(bg=t["accent"], fg=t["accent_fg"])  # green = play/resume
+                elif role == "btn_stop_ctrl":
+                    _active = bool(self._bot_process and self._bot_process.is_alive()) or self._is_paused
+                    if _active:
+                        w.configure(bg=t["danger"], fg=t["danger_fg"], state=tk.NORMAL)
+                    else:
+                        w.configure(bg=t["btn_neutral"], fg=t["btn_neu_fg"], state=tk.DISABLED)
                 elif role == "btn_neutral":
                     w.configure(bg=t["btn_neutral"], fg=t["btn_neu_fg"])
                 elif role == "btn_toggle":
@@ -290,8 +496,13 @@ class BotApp(tk.Tk):
                     w.configure(bg=t["bg2"], activebackground=t["bg2"])
                 elif role == "status":
                     w.configure(bg=t["bg"], fg=t["fg2"])
-                elif role == "log_text":
-                    w.configure(bg=t["bg3"], fg=t["fg"])
+                elif role == "stat_skip":
+                    w.configure(bg=t["bg"], fg=t["fg2"])
+                elif role == "stat_success":
+                    w.configure(bg=t["bg"], fg=t["log_info"])
+                elif role == "stat_error":
+                    err_count = len(self._stat_errors)
+                    w.configure(bg=t["bg"], fg=t["log_error"] if err_count > 0 else t["fg2"])
                     w.tag_config("ERROR",   foreground=t["log_error"])
                     w.tag_config("WARNING", foreground=t["log_warning"])
                     w.tag_config("INFO",    foreground=t["log_info"])
@@ -304,6 +515,14 @@ class BotApp(tk.Tk):
         style.configure("bot.Horizontal.TProgressbar",
                         troughcolor=t["progress_bg"],
                         background=t["accent"], thickness=4)
+        # Error listbox colors
+        try:
+            self._error_listbox.configure(bg=t["bg3"], fg=t["fg"],
+                                          selectbackground=t["bg2"],
+                                          selectforeground=t["log_error"])
+            self._error_list_frame.configure(bg=t["bg"])
+        except Exception:
+            pass
 
     def _toggle_theme(self):
         self._theme_name = "light" if self._theme_name == "dark" else "dark"
@@ -324,6 +543,7 @@ class BotApp(tk.Tk):
         "status_done":    "#a6e3a1",  # green
         "status_stopped": "#f38ba8",  # red
         "status_stopping":"#fab387",  # orange
+        "status_paused":  "#fab387",  # orange
     }
 
     def _set_status(self, key: str):
@@ -368,8 +588,14 @@ class BotApp(tk.Tk):
             self._lbl_sa_json.configure(text=L.get("label_sa_json", ""))
             self._btn_browse.configure(text=L.get("btn_browse", ""))
             _is_running = bool(self._bot_process and self._bot_process.is_alive())
-            self._run_btn.configure(text=L.get("btn_stop" if _is_running else "btn_run", ""))
+            if not _is_running and not self._is_paused:
+                self._play_pause_btn.configure(text=L.get("btn_run", ""))
+            elif self._is_paused:
+                self._play_pause_btn.configure(text=L.get("btn_resume", ""))
+            else:
+                self._play_pause_btn.configure(text=L.get("btn_pause", ""))
             self._btn_clear.configure(text=L.get("btn_clear_log", ""))
+            self._settings_btn.configure(text="⚙  " + L.get("settings_dialog_title", "Settings"))
             self._log_lf.configure(text=L.get("section_log", ""))
             self._log_lf.configure(fg=t["label_frame"])
             # Theme toggle text depends on current theme
@@ -384,6 +610,9 @@ class BotApp(tk.Tk):
                 self._lang_btn.configure(image="", text=L.get("toggle_lang", ""))
             # Sync status text to current language
             self._set_status(self._current_status_key)
+            # Update stats section
+            self._stats_lf.configure(text=L.get("section_stats", ""))
+            self._update_stat_labels()
         except Exception:
             pass
 
@@ -397,6 +626,9 @@ class BotApp(tk.Tk):
             os.environ["GUI_LANG"] = self._lang
         except Exception:
             pass
+
+    def _open_settings(self):
+        _SettingsDialog(self)
 
     def _reg(self, widget, role: str):
         """Register widget for theme tracking."""
@@ -530,7 +762,7 @@ class BotApp(tk.Tk):
         ), "btn_toggle")
         self._toggle_btn.pack(side=tk.RIGHT, padx=12)
 
-        # ── Settings frame ───────────────────────────────────────────────────
+        # ── Settings frame ─────────────────────────────────────────────────────────
         self._settings_lf = self._reg(tk.LabelFrame(
             self, text=self._("section_settings"), font=("Segoe UI", 10),
             bg=t["bg"], fg=t["settings_fg"], bd=1, relief=tk.GROOVE
@@ -577,14 +809,23 @@ class BotApp(tk.Tk):
         btn_frame = self._reg(tk.Frame(self, bg=t["bg"]), "bg")
         btn_frame.pack(fill=tk.X, padx=16, pady=8)
 
-        self._run_btn = self._reg(tk.Button(
-            btn_frame, text=self._("btn_run"), command=self._on_toggle,
+        self._play_pause_btn = self._reg(tk.Button(
+            btn_frame, text=self._("btn_run"), command=self._on_play_pause,
             bg=t["accent"], fg=t["accent_fg"],
             font=("Segoe UI", 11, "bold"),
             relief=tk.FLAT, padx=16, pady=8, cursor="hand2",
-            width=8,
+            width=10,
         ), "btn_run")
-        self._run_btn.pack(side=tk.LEFT, padx=(0, 8))
+        self._play_pause_btn.pack(side=tk.LEFT, padx=(0, 6))
+
+        self._stop_btn = self._reg(tk.Button(
+            btn_frame, text=self._("btn_stop"), command=self._on_stop,
+            bg=t["btn_neutral"], fg=t["btn_neu_fg"],
+            font=("Segoe UI", 11, "bold"),
+            relief=tk.FLAT, padx=14, pady=8, cursor="hand2",
+            width=7, state=tk.DISABLED,
+        ), "btn_stop_ctrl")
+        self._stop_btn.pack(side=tk.LEFT, padx=(0, 8))
 
         self._btn_clear = self._reg(tk.Button(
             btn_frame, text=self._("btn_clear_log"), command=self._clear_log,
@@ -593,6 +834,14 @@ class BotApp(tk.Tk):
             relief=tk.FLAT, padx=12, pady=8, cursor="hand2",
         ), "btn_neutral")
         self._btn_clear.pack(side=tk.LEFT)
+
+        self._settings_btn = self._reg(tk.Button(
+            btn_frame, text="⚙  "+self._("settings_dialog_title"), command=self._open_settings,
+            bg=t["btn_neutral"], fg=t["btn_neu_fg"],
+            font=("Segoe UI", 10),
+            relief=tk.FLAT, padx=12, pady=8, cursor="hand2",
+        ), "btn_neutral")
+        self._settings_btn.pack(side=tk.LEFT, padx=(8, 0))
 
         # Status indicator (colored dot) + text
         self._status_var = tk.StringVar(value=self._("status_ready"))
@@ -615,6 +864,63 @@ class BotApp(tk.Tk):
             style="bot.Horizontal.TProgressbar"
         )
         self._progress.pack(fill=tk.X, padx=16, pady=(0, 4))
+
+        # ── Stats panel ───────────────────────────────────────────────────────
+        self._stats_lf = self._reg(tk.LabelFrame(
+            self, text=self._("section_stats"), font=("Segoe UI", 10),
+            bg=t["bg"], fg=t["label_frame"], bd=1, relief=tk.GROOVE
+        ), "lf_stats")
+        self._stats_lf.pack(fill=tk.X, padx=16, pady=(0, 4))
+
+        # Row: three count badges
+        counts_row = self._reg(tk.Frame(self._stats_lf, bg=t["bg"]), "bg")
+        counts_row.pack(fill=tk.X, padx=6, pady=(4, 2))
+
+        self._stat_skip_var    = tk.StringVar(value=f"{self._('stat_skip')}: 0")
+        self._stat_success_var = tk.StringVar(value=f"{self._('stat_success')}: 0")
+        self._stat_error_var   = tk.StringVar(value=f"{self._('stat_error')}: 0")
+
+        self._reg(tk.Label(
+            counts_row, textvariable=self._stat_skip_var,
+            bg=t["bg"], fg=t["fg2"], font=("Segoe UI", 10),
+        ), "stat_skip").pack(side=tk.LEFT, padx=(0, 16))
+
+        self._reg(tk.Label(
+            counts_row, textvariable=self._stat_success_var,
+            bg=t["bg"], fg=t["log_info"], font=("Segoe UI", 10, "bold"),
+        ), "stat_success").pack(side=tk.LEFT, padx=(0, 16))
+
+        self._stat_error_lbl = self._reg(tk.Label(
+            counts_row, textvariable=self._stat_error_var,
+            bg=t["bg"], fg=t["fg2"], font=("Segoe UI", 10),
+            cursor="hand2",
+        ), "stat_error")
+        self._stat_error_lbl.pack(side=tk.LEFT)
+        self._stat_error_lbl.bind("<Button-1>", self._on_error_label_click)
+
+        # Error list (hidden until first error appears)
+        self._error_list_frame = tk.Frame(self._stats_lf, bg=t["bg"])
+        # Do NOT pack yet — shown dynamically when errors arrive
+
+        _err_lf = self._reg(tk.LabelFrame(
+            self._error_list_frame,
+            text=self._("stat_error_list"),
+            font=("Segoe UI", 9),
+            bg=t["bg"], fg=t["log_error"], bd=1, relief=tk.GROOVE,
+        ), "lf_error_list")
+        _err_lf.pack(fill=tk.X, padx=4, pady=(0, 4))
+
+        self._error_listbox = tk.Listbox(
+            _err_lf, height=4, selectmode=tk.SINGLE,
+            bg=t["bg3"], fg=t["fg"], font=("Consolas", 9),
+            relief=tk.FLAT, bd=0, activestyle="none",
+            selectbackground=t["bg2"], selectforeground=t["log_error"],
+        )
+        _err_scroll = ttk.Scrollbar(_err_lf, command=self._error_listbox.yview)
+        self._error_listbox.configure(yscrollcommand=_err_scroll.set)
+        self._error_listbox.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0), pady=4)
+        _err_scroll.pack(side=tk.RIGHT, fill=tk.Y, pady=4)
+        self._error_listbox.bind("<<ListboxSelect>>", self._on_error_click)
 
         # ── Log output ────────────────────────────────────────────────────────
         self._log_lf = self._reg(tk.LabelFrame(
@@ -652,15 +958,17 @@ class BotApp(tk.Tk):
 
     def _append_log(self, message: str):
         self._log_text.configure(state=tk.NORMAL)
-        # Determine tag from level keyword in message
-        tag = "INFO"
-        up = message.upper()
-        if "ERROR" in up or "EXCEPTION" in up or "CRITICAL" in up:
-            tag = "ERROR"
-        elif "WARNING" in up or "WARN" in up:
-            tag = "WARNING"
-        elif "DEBUG" in up:
-            tag = "DEBUG"
+        # Derive tag from the level prefix produced by the log formatter
+        # Format: "LEVELNAME | logger.name | message text"
+        _first = message.split('|', 1)[0].strip().upper() if '|' in message else ''
+        if _first in ('ERROR', 'CRITICAL', 'EXCEPTION'):
+            tag = 'ERROR'
+        elif _first == 'WARNING':
+            tag = 'WARNING'
+        elif _first == 'DEBUG':
+            tag = 'DEBUG'
+        else:
+            tag = 'INFO'
         self._log_text.insert(tk.END, message + "\n", tag)
         self._log_text.see(tk.END)
         self._log_text.configure(state=tk.DISABLED)
@@ -685,15 +993,250 @@ class BotApp(tk.Tk):
                     self._append_log(msg)
             except Exception:
                 pass
+        # Drain stats queue separately
+        try:
+            while True:
+                ev = self._stats_queue.get_nowait()
+                if isinstance(ev, dict) and ev.get('type') == 'stat':
+                    self._handle_stat_event(ev)
+        except Exception:
+            pass
         self.after(100, self._poll_log_queue)
 
     # ── Bot thread ────────────────────────────────────────────────────────────
 
-    def _on_toggle(self):
-        if self._bot_process and self._bot_process.is_alive():
-            self._on_stop()
+    def _reset_stats(self):
+        """Reset all order stats counters and clear the error list."""
+        self._stat_skip = 0
+        self._stat_success = 0
+        self._stat_errors = []
+        self._stat_skip_var.set(f"{self._('stat_skip')}: 0")
+        self._stat_success_var.set(f"{self._('stat_success')}: 0")
+        self._stat_error_var.set(f"{self._('stat_error')}: 0")
+        self._error_listbox.delete(0, tk.END)
+        self._error_list_frame.pack_forget()
+
+    def _update_stat_labels(self):
+        self._stat_skip_var.set(f"{self._('stat_skip')}: {self._stat_skip}")
+        self._stat_success_var.set(f"{self._('stat_success')}: {self._stat_success}")
+        err_count = len(self._stat_errors)
+        self._stat_error_var.set(f"{self._('stat_error')}: {err_count}")
+        t = self._theme
+        if err_count > 0:
+            self._stat_error_lbl.configure(fg=t["log_error"])
         else:
+            self._stat_error_lbl.configure(fg=t["fg2"])
+
+    def _handle_stat_event(self, ev: dict):
+        etype = ev.get('event')
+        if etype == 'skip':
+            self._stat_skip += 1
+        elif etype == 'success':
+            self._stat_success += 1
+        elif etype == 'error':
+            self._stat_errors.append(ev)
+            order_id = ev.get('order_id', '?')
+            venture  = ev.get('venture', '')
+            brand    = ev.get('brand', '')
+            error    = ev.get('error', '')
+            # Shorten error to first 40 chars for display
+            err_short = error[:40].rstrip() + ('…' if len(error) > 40 else '') if error else ''
+            parts = []
+            if venture:
+                parts.append(venture)
+            if brand:
+                parts.append(brand)
+            prefix = f"[{' | '.join(parts)}] " if parts else ""
+            tag = f"  {prefix}{order_id}" + (f"  — {err_short}" if err_short else "")
+            self._error_listbox.insert(tk.END, tag)
+            if len(self._stat_errors) == 1:
+                # show the error list frame for the first time
+                self._error_list_frame.pack(fill=tk.X, padx=4, pady=(0, 2))
+        self._update_stat_labels()
+
+    def _on_error_label_click(self, _event=None):
+        """Clicking the error count label opens the last error detail (or selects first)."""
+        if self._stat_errors:
+            self._show_error_detail(self._stat_errors[-1])
+
+    def _on_error_click(self, _event=None):
+        """Double/single click on an error list item opens its detail popup."""
+        sel = self._error_listbox.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        if idx < len(self._stat_errors):
+            self._show_error_detail(self._stat_errors[idx])
+
+    def _show_error_detail(self, ev: dict):
+        """Open a Toplevel window showing error details, OCR text, and the debug image."""
+        t = self._theme
+        order_id = ev.get('order_id', '?')
+        venture  = ev.get('venture', '')
+        error    = ev.get('error', '')
+        crop_path = ev.get('crop_path')
+        ocr_lines = ev.get('ocr_lines') or []
+
+        top = tk.Toplevel(self)
+        top.title(f"{self._('stat_detail_title')} — {order_id}")
+        top.configure(bg=t["bg"])
+        top.resizable(True, True)
+        top.minsize(520, 360)
+
+        # ── Header info ──────────────────────────────────────────────────────
+        info_frame = tk.Frame(top, bg=t["bg2"], pady=8)
+        info_frame.pack(fill=tk.X)
+
+        def _inf_lbl(label_key, value, bold=False):
+            row = tk.Frame(info_frame, bg=t["bg2"])
+            row.pack(fill=tk.X, padx=12, pady=1)
+            tk.Label(row, text=self._(label_key), bg=t["bg2"], fg=t["fg2"],
+                      font=("Segoe UI", 9)).pack(side=tk.LEFT)
+            tk.Label(row, text=value, bg=t["bg2"], fg=t["fg"],
+                      font=("Segoe UI", 9, "bold" if bold else "normal"),
+                      wraplength=480, justify=tk.LEFT).pack(side=tk.LEFT, padx=(4, 0))
+
+        _inf_lbl("stat_label_order",   order_id,  bold=True)
+        if venture:
+            _inf_lbl("stat_label_venture", venture)
+        if error:
+            _inf_lbl("stat_label_error",   error)
+
+        # ── Body: image (left) + OCR text (right) ────────────────────────────
+        body = tk.Frame(top, bg=t["bg"])
+        body.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        body.columnconfigure(1, weight=1)
+        body.rowconfigure(0, weight=1)
+
+        # Left: debug image
+        img_frame = tk.Frame(body, bg=t["bg2"], width=320)
+        img_frame.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 6))
+        img_frame.pack_propagate(False)
+
+        _img_lbl = tk.Label(img_frame, bg=t["bg2"], cursor="hand2")
+        _img_lbl.pack(expand=True)
+
+        def _open_full_image():
+            if not crop_path:
+                return
+            try:
+                full_win = tk.Toplevel(top)
+                full_win.title("Screenshot")
+                full_win.configure(bg=t["bg3"])
+                full_win.resizable(True, True)
+
+                # Open original at full size, fit to 90% of screen
+                pil_full = Image.open(crop_path)
+                sw = full_win.winfo_screenwidth()
+                sh = full_win.winfo_screenheight()
+                max_w = int(sw * 0.9)
+                max_h = int(sh * 0.9)
+                pil_full.thumbnail((max_w, max_h), Image.LANCZOS)
+                full_photo = ImageTk.PhotoImage(pil_full)
+
+                full_win.geometry(f"{pil_full.width}x{pil_full.height}")
+                lbl = tk.Label(full_win, image=full_photo, bg=t["bg3"])
+                lbl._photo_ref = full_photo
+                lbl.pack(fill=tk.BOTH, expand=True)
+                lbl.bind("<Button-1>", lambda _: full_win.destroy())
+            except Exception as err:
+                messagebox.showerror("Lỗi", str(err), parent=top)
+
+        _img_lbl.bind("<Button-1>", lambda _: _open_full_image())
+
+        # Load image in background so dialog opens instantly
+        def _load_image():
+            if crop_path:
+                try:
+                    img = Image.open(crop_path)
+                    # Fit inside 310×200 keeping aspect ratio
+                    img.thumbnail((310, 200), Image.LANCZOS)
+                    photo = ImageTk.PhotoImage(img)
+                    def _set(p=photo):
+                        _img_lbl.configure(image=p, text="")
+                        _img_lbl._photo_ref = p
+                    top.after(0, _set)
+                    return
+                except Exception:
+                    pass
+            def _no_img():
+                _img_lbl.configure(text=self._("stat_no_image"),
+                                   fg=t["fg2"], font=("Segoe UI", 9))
+            top.after(0, _no_img)
+
+        threading.Thread(target=_load_image, daemon=True).start()
+
+        # Right: OCR lines
+        ocr_frame = tk.Frame(body, bg=t["bg"])
+        ocr_frame.grid(row=0, column=1, sticky=tk.NSEW)
+
+        tk.Label(ocr_frame, text=self._("stat_label_ocr"),
+                 bg=t["bg"], fg=t["fg2"], font=("Segoe UI", 9)).pack(anchor=tk.W)
+
+        ocr_box = scrolledtext.ScrolledText(
+            ocr_frame, bg=t["bg3"], fg=t["fg"],
+            font=("Consolas", 9), relief=tk.FLAT, wrap=tk.WORD,
+        )
+        ocr_box.pack(fill=tk.BOTH, expand=True)
+        ocr_content = "\n".join(ocr_lines) if ocr_lines else "—"
+        ocr_box.insert(tk.END, ocr_content)
+        ocr_box.configure(state=tk.DISABLED)
+
+    # ── Process suspend/resume (Windows) ─────────────────────────────────────
+
+    @staticmethod
+    def _suspend_process(pid: int):
+        try:
+            handle = ctypes.windll.kernel32.OpenProcess(0x1F0FFF, False, pid)
+            ctypes.windll.ntdll.NtSuspendProcess(handle)
+            ctypes.windll.kernel32.CloseHandle(handle)
+        except Exception as e:
+            logging.getLogger(__name__).debug('NtSuspendProcess failed: %s', e)
+
+    @staticmethod
+    def _resume_process(pid: int):
+        try:
+            handle = ctypes.windll.kernel32.OpenProcess(0x1F0FFF, False, pid)
+            ctypes.windll.ntdll.NtResumeProcess(handle)
+            ctypes.windll.kernel32.CloseHandle(handle)
+        except Exception as e:
+            logging.getLogger(__name__).debug('NtResumeProcess failed: %s', e)
+
+    def _on_play_pause(self):
+        running = bool(self._bot_process and self._bot_process.is_alive())
+        if not running and not self._is_paused:
             self._on_run()
+        elif running and not self._is_paused:
+            self._on_pause()
+        else:
+            self._on_resume()
+
+    def _on_pause(self):
+        if not (self._bot_process and self._bot_process.is_alive()):
+            return
+        self._is_paused = True
+        self._suspend_process(self._bot_process.pid)
+        self._progress.stop()
+        t = self._theme
+        self._play_pause_btn.configure(text=self._("btn_resume"),
+                                       bg=t["accent"], fg=t["accent_fg"])
+        self._stop_btn.configure(bg=t["danger"], fg=t["danger_fg"], state=tk.NORMAL)
+        self._set_status("status_paused")
+        logging.getLogger(__name__).info("Bot đã tạm dừng (PID %s)", self._bot_process.pid)
+
+    def _on_resume(self):
+        if not (self._bot_process and self._bot_process.is_alive()):
+            self._is_paused = False
+            return
+        self._is_paused = False
+        self._resume_process(self._bot_process.pid)
+        self._progress.start(12)
+        t = self._theme
+        self._play_pause_btn.configure(text=self._("btn_pause"),
+                                       bg=t["log_warning"], fg="#1e1e2e")
+        self._stop_btn.configure(bg=t["danger"], fg=t["danger_fg"], state=tk.NORMAL)
+        self._set_status("status_running")
+        logging.getLogger(__name__).info("Bot tiếp tục chạy (PID %s)", self._bot_process.pid)
 
     def _on_run(self):
         sheet_id = self._sheet_id_var.get().strip()
@@ -719,10 +1262,14 @@ class BotApp(tk.Tk):
         except Exception:
             pass
 
+        self._is_paused = False
         t = self._theme
-        self._run_btn.configure(text=self._("btn_stop"), bg=t["danger"], fg=t["danger_fg"])
+        self._play_pause_btn.configure(text=self._("btn_pause"),
+                                       bg=t["log_warning"], fg="#1e1e2e")
+        self._stop_btn.configure(bg=t["danger"], fg=t["danger_fg"], state=tk.NORMAL)
         self._set_status("status_running")
         self._progress.start(12)
+        self._reset_stats()
 
         # Drain stale messages from previous run
         try:
@@ -730,10 +1277,15 @@ class BotApp(tk.Tk):
                 self._proc_log_queue.get_nowait()
         except Exception:
             pass
+        try:
+            while True:
+                self._stats_queue.get_nowait()
+        except Exception:
+            pass
 
         self._bot_process = mp.Process(
             target=_bot_process_target,
-            args=(sheet_id, sheet_name, self._proc_log_queue, str(_PROJECT_ROOT)),
+            args=(sheet_id, sheet_name, self._proc_log_queue, str(_PROJECT_ROOT), self._stats_queue),
             daemon=True,
         )
         self._bot_process.start()
@@ -742,6 +1294,10 @@ class BotApp(tk.Tk):
 
     def _on_stop(self):
         logger = logging.getLogger(__name__)
+        # If paused, resume first so the process can be terminated cleanly
+        if self._is_paused and self._bot_process and self._bot_process.is_alive():
+            self._resume_process(self._bot_process.pid)
+        self._is_paused = False
         if self._bot_process and self._bot_process.is_alive():
             logger.warning(self._("log_killing"), self._bot_process.pid)
             self._bot_process.terminate()
@@ -752,16 +1308,21 @@ class BotApp(tk.Tk):
             logger.warning(self._("log_killed"))
         self._progress.stop()
         t = self._theme
-        self._run_btn.configure(text=self._("btn_run"), bg=t["accent"], fg=t["accent_fg"])
+        self._play_pause_btn.configure(text=self._("btn_run"),
+                                       bg=t["accent"], fg=t["accent_fg"])
+        self._stop_btn.configure(bg=t["btn_neutral"], fg=t["btn_neu_fg"], state=tk.DISABLED)
         self._set_status("status_stopped")
 
     def _check_thread(self):
         if self._bot_process and self._bot_process.is_alive():
             self.after(300, self._check_thread)
         else:
+            self._is_paused = False
             self._progress.stop()
             t = self._theme
-            self._run_btn.configure(text=self._("btn_run"), bg=t["accent"], fg=t["accent_fg"])
+            self._play_pause_btn.configure(text=self._("btn_run"),
+                                           bg=t["accent"], fg=t["accent_fg"])
+            self._stop_btn.configure(bg=t["btn_neutral"], fg=t["btn_neu_fg"], state=tk.DISABLED)
             exitcode = self._bot_process.exitcode if self._bot_process else None
             # exitcode < 0 means terminated by signal (user stopped it)
             if exitcode is not None and exitcode < 0:

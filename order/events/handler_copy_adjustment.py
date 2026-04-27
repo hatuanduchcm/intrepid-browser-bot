@@ -65,16 +65,37 @@ def handle_copy_adjustment_event(event_payload):
         raise RuntimeError('Intrepid window not found')
 
     venture = (event_payload.get('venture') or '').strip().upper()
+    order_id = (event_payload.get('order_id') or event_payload.get('order') or '').strip()
 
     # try to get tooltip data using layered strategies
     try:
         # first capture tooltip popup visually (hover/click) so we have images available
-        crop_path = _hover_and_capture_tooltip(w)
+        crop_result = _hover_and_capture_tooltip(w, venture=venture, order_id=order_id)
 
-        # then attempt: control-level tooltip or Pane scan (may succeed without OCR)
-        # text = get_tooltip_data(w)
-        # if text:
-        #     return text
+        # Check if this is a return_compensation fallback result
+        if isinstance(crop_result, dict) and '__return_compensation_crop__' in crop_result:
+            comp_crop = crop_result['__return_compensation_crop__']
+            from utils.ocr import ocr_image
+            from utils.amounts import clean_amount
+            from gsheets.order_adjustment_sheet import ColumnName
+            raw_text = ocr_image(comp_crop) if ocr_image else ''
+            lines = [l.strip() for l in (raw_text or '').splitlines() if l.strip()]
+            last_line = lines[-1] if lines else ''
+            _, num = split_text_and_number(last_line) if last_line else ('', '')
+            if not num and raw_text.strip():
+                _, num = split_text_and_number(raw_text.strip())
+            value = clean_amount(num, venture=venture) if num else ''
+            logger.info('return_compensation value: %s (raw_text=%r)', value, raw_text)
+            # cleanup crop file — keep only when value could not be extracted (for debugging)
+            try:
+                if value and comp_crop:
+                    Path(comp_crop).unlink(missing_ok=True)
+                    logger.debug('return_compensation crop deleted: %s', comp_crop)
+            except Exception:
+                logger.debug('Failed to delete return_compensation crop: %s', comp_crop)
+            return {ColumnName.REFUND_COMPENSATION: value}
+
+        crop_path = crop_result if isinstance(crop_result, str) else None
 
         # finally, try OCR/template on captured images (prefer crop only)
         text = get_tooltip_data(_path=crop_path, venture=venture)
@@ -87,7 +108,7 @@ def handle_copy_adjustment_event(event_payload):
     raise RuntimeError('Adjustment details not found')
 
 
-def _hover_and_capture_tooltip(window):
+def _hover_and_capture_tooltip(window, venture: str = '', order_id: str = ''):
     """Locate the question icon visually, hover/click it and capture screenshots.
     Returns crop_path where crop_path may be None.
     """
@@ -102,26 +123,12 @@ def _hover_and_capture_tooltip(window):
         except Exception:
             logger.debug('set_focus failed, proceeding without focusing window')
 
-        # try to scroll the page to the adjustment using Ctrl+F
-        # try:
-        #     pyautogui.click(500, 500)
-        #     time.sleep(0.8)
-        #     pyautogui.hotkey('ctrl', 'f')
-        #     time.sleep(0.5)
-        #     pyautogui.typewrite('Order Adjustment', interval=0.05)
-
-        #     pyautogui.press('enter')
-        #     shot_path = DEBUG_DIR / f'after_find_{int(time.time())}.png'
-        #     pyautogui.screenshot(str(shot_path))
-        # except Exception as e:
-        #     logger.debug('Ctrl+F search failed: %s', e)
-
         result = find_order_adjustment_block()
 
         if result:
             logger.info(f"Found at ({result['x']}, {result['y']})")
         else:
-            logger.warning("Not found")
+            logger.warning("Order Adjustment block not found")
 
         if icon_path.exists():
             try:
@@ -148,15 +155,79 @@ def _hover_and_capture_tooltip(window):
                         crop_path = capture_debug_shots(cx, cy)
                     except Exception:
                         crop_path = None
+                else:
+                    # question icon not found — try return_compensation_row fallback
+                    logger.debug('question icon not found, trying return_compensation_row fallback')
+                    crop_path = _capture_return_compensation_value(venture=venture, order_id=order_id)
             except Exception as e:
                 logger.debug('image locate/click failed: %s', e)
         else:
             logger.debug('Question icon image not found')
+            # also try return_compensation_row fallback if question icon file missing
+            crop_path = _capture_return_compensation_value(venture=venture, order_id=order_id)
     except Exception as e:
         logger.debug('hover_and_capture failed: %s', e)
 
     return crop_path
 
+
+def _capture_return_compensation_value(venture: str = '', order_id: str = '') -> Optional[dict]:
+    """Locate return_compensation_row.png on screen; capture value area to its right.
+
+    Returns a dict with REFUND_COMPENSATION key and raw crop path,
+    or None if the template is not found.
+    """
+    template_path = Path(__file__).resolve().parents[2] / 'assets' / 'icons' / 'return_compensation_row.png'
+    if not template_path.exists():
+        logger.debug('return_compensation_row.png not found in assets/icons/')
+        return None
+
+    try:
+        match = None
+        deadline = time.time() + 3.0
+        while time.time() < deadline:
+            try:
+                match = pyautogui.locateOnScreen(str(template_path), confidence=0.75)
+                if match:
+                    break
+            except Exception as e:
+                logger.debug('locateOnScreen return_compensation error: %s', e)
+            time.sleep(0.3)
+
+        if not match:
+            logger.debug('return_compensation_row not found on screen')
+            return None
+
+        # Capture from the left edge of the matched row (avoids left sidebar icons)
+        # and extend to the right screen edge. Height covers 3 rows (current + 2 below).
+        import mss, mss.tools
+        screen_w, screen_h = pyautogui.size()
+        row_h    = max(match.height, 30)
+        value_x  = max(0, match.left - 10)      # start just before the matched label
+        value_y  = match.top
+        value_h  = row_h * 3                     # current row + 2 rows below
+        value_w  = screen_w - 120 - value_x      # exclude far-right sidebar/scrollbar
+
+        crop_path = DEBUG_DIR / f'return_compensation_{venture}_{order_id}.png'
+        try:
+            with mss.mss() as sct:
+                mon = {'left': int(value_x), 'top': int(value_y),
+                       'width': int(value_w), 'height': int(value_h)}
+                shot = sct.grab(mon)
+                mss.tools.to_png(shot.rgb, shot.size, output=str(crop_path))
+        except Exception:
+            shot = pyautogui.screenshot(region=(int(value_x), int(value_y),
+                                                int(value_w), int(value_h)))
+            shot.save(str(crop_path))
+
+        logger.info('return_compensation_row found, captured value crop: %s', crop_path)
+        # Return special marker dict so caller knows this is a compensation-only result
+        return {'__return_compensation_crop__': str(crop_path)}
+
+    except Exception as e:
+        logger.debug('_capture_return_compensation_value failed: %s', e)
+        return None
+    
 def find_order_adjustment_block(
     max_scrolls: int = 30,
     confidence: float = 0.8,
@@ -297,9 +368,16 @@ def get_tooltip_data(_path=None, venture: str = ''):
             except Exception:
                 logger.exception('Failed to write adjustment_result error')
 
-            # cleanup crop artifact when totals match to reduce files
+            # cleanup crop artifact:
+            # - always delete when totals match
+            # - also delete when there is no total to validate (check is None) = clean success
+            # - keep file only on explicit mismatch (for debugging)
+            should_delete = (
+                (isinstance(check, dict) and check.get('matches'))
+                or check is None
+            )
             try:
-                if isinstance(check, dict) and check.get('matches') and _path:
+                if should_delete and _path:
                     p = Path(_path)
                     if p.exists():
                         p.unlink()

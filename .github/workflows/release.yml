@@ -9,6 +9,8 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
 
     steps:
       - name: Checkout
@@ -52,7 +54,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force C:\tess-cache | Out-Null
-          Invoke-WebRequest -Uri "https://github.com/UB-Mannheim/tesseract/releases/download/v5.5.0.20241111/tesseract-ocr-w64-setup-5.5.0.20241111.exe" `
+          Invoke-WebRequest -Uri "https://github.com/tesseract-ocr/tesseract/releases/download/5.5.0/tesseract-ocr-w64-setup-5.5.0.20241111.exe" `
             -OutFile "C:\tess-cache\tesseract-setup.exe"
 
       - name: Install Tesseract
@@ -91,14 +93,56 @@ jobs:
           Compress-Archive -Path dist\InvoiceAdjustmentBot\* `
             -DestinationPath InvoiceAdjustmentBot.zip
 
-      - name: Create GitHub Release (dist repo)
-        uses: softprops/action-gh-release@v2
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          repository: hatuanduc/intrepid-browser-bot-dist
-          tag_name: v${{ steps.ver.outputs.version }}
-          name: v${{ steps.ver.outputs.version }}
-          body: |
-            Auto-release từ commit ${{ github.sha }}
-          files: InvoiceAdjustmentBot.zip
+          name: InvoiceAdjustmentBot
+          path: InvoiceAdjustmentBot.zip
+          retention-days: 1
+
+  release:
+    runs-on: windows-latest
+    needs: build
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: InvoiceAdjustmentBot
+
+      - name: Init dist repo if empty
+        shell: pwsh
         env:
-          GITHUB_TOKEN: ${{ secrets.INTREPID_BROWSER_BOT_DIST_RELEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.INTREPID_BROWSER_BOT_DIST_RELEASE_TOKEN }}
+        run: |
+          $repo = "hatuanduchcm/intrepid-browser-bot-dist"
+          $commits = gh api repos/$repo/commits --jq '.[0].sha' 2>&1
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($commits)) {
+            Write-Host "Dist repo is empty — creating initial commit via API"
+            $content = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("# intrepid-browser-bot-dist`n"))
+            gh api repos/$repo/contents/README.md -X PUT `
+              -f message="init" `
+              -f content=$content `
+              -f branch="main"
+          } else {
+            Write-Host "Dist repo already has commits"
+          }
+
+      - name: Create GitHub Release (dist repo)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.INTREPID_BROWSER_BOT_DIST_RELEASE_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $tag = "v${{ needs.build.outputs.version }}"
+          $repo = "hatuanduchcm/intrepid-browser-bot-dist"
+          # Delete existing release+tag if present (idempotent re-run)
+          $exists = gh release view $tag --repo $repo 2>&1
+          if ($LASTEXITCODE -eq 0) {
+            gh release delete $tag --repo $repo --yes --cleanup-tag
+          }
+          gh release create $tag `
+            --repo $repo `
+            --title $tag `
+            --notes "Auto-release from commit ${{ github.sha }}" `
+            InvoiceAdjustmentBot.zip

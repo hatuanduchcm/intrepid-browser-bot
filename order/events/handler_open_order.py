@@ -197,9 +197,59 @@ def _dismiss_popups(max_attempts: int = 2, icon_name: str = 'close-popup.png', c
 
     logger.debug('dismiss_popups reached max attempts (%d) and stopped', max_attempts)
 
+def _select_fulfillment_all() -> bool:
+    """Find the Fulfillment Type selector and click the 'All' option if present.
+
+    Looks for assets/icons/fulfillment_type_select.png (the dropdown trigger),
+    clicks it to open, then clicks assets/icons/fulfillment_all_option.png.
+    Falls back to clicking fulfillment_all_option.png directly if dropdown trigger
+    is not needed or already open.
+    Returns True if 'All' was successfully clicked.
+    """
+    try:
+        import pyautogui
+        _icons_dir = Path(__file__).resolve().parents[2] / 'assets' / 'icons'
+
+        # Step 1: optionally click the dropdown trigger to open it
+        trigger_img = _icons_dir / 'fulfillment_type_select.png'
+        if trigger_img.exists():
+            try:
+                t = pyautogui.locateCenterOnScreen(str(trigger_img), confidence=0.75)
+                if t:
+                    pyautogui.click(t.x, t.y)
+                    time.sleep(0.4)
+                    logger.debug('Clicked fulfillment type dropdown trigger')
+                else:
+                    logger.debug('fulfillment_type_select.png not found on screen, skipping trigger click')
+            except Exception as e:
+                logger.debug('Could not click fulfillment type trigger: %s', e)
+
+        # Step 2: click the 'All' option
+        all_img = _icons_dir / 'fulfillment_all_option.png'
+        if all_img.exists():
+            try:
+                a = pyautogui.locateCenterOnScreen(str(all_img), confidence=0.75)
+                if a:
+                    pyautogui.click(a.x, a.y)
+                    time.sleep(0.4)
+                    logger.debug('Selected fulfillment type = All')
+                    return True
+                else:
+                    logger.debug('fulfillment_all_option.png not found on screen')
+            except Exception as e:
+                logger.debug('Could not click fulfillment All option: %s', e)
+        else:
+            logger.debug('fulfillment_all_option.png not in assets/icons/, skipping fulfillment filter')
+    except Exception as e:
+        logger.debug('_select_fulfillment_all failed: %s', e)
+    return False
+
+
 def _find_and_fill_order_input(edits, order_id: str) -> bool:
     """Locate an order-id input either via Edit controls or image fallback and fill it.
 
+    Before typing the order ID, attempts to set the Fulfillment Type filter to 'All'
+    if the corresponding icon assets are present.
     Returns True if input was filled and Enter was sent.
     """
 
@@ -210,6 +260,12 @@ def _find_and_fill_order_input(edits, order_id: str) -> bool:
         if input_img.exists():
             m = pyautogui.locateCenterOnScreen(str(input_img), confidence=0.8)
             if m:
+                # Try to set Fulfillment Type to 'All' before entering the order ID
+                try:
+                    _select_fulfillment_all()
+                except Exception as e:
+                    logger.debug('_select_fulfillment_all raised: %s', e)
+
                 pyautogui.click(m.x, m.y)
                 time.sleep(0.2)
                 pyautogui.typewrite(str(order_id), interval=0.05)
