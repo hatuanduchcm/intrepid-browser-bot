@@ -45,8 +45,18 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
             logger.debug('[%s] Failed to capture error screenshot: %s', order_id, e)
             return None
 
-    def _latest_debug_image() -> str | None:
-        """Return the most recently saved adjustment debug image (area capture or popup crop)."""
+    def _latest_debug_image(order_id: str = '') -> str | None:
+        """Return the most recently saved adjustment debug image for the given order_id.
+        Falls back to the most recent image overall if no order_id match found."""
+        # prefer files that contain order_id in the name (exact match)
+        if order_id:
+            order_candidates = [
+                *_debug_dir.glob(f'adjustment_area_{order_id}_*.png'),
+                *_debug_dir.glob(f'popup_crop_{order_id}_*.png'),
+            ]
+            if order_candidates:
+                return str(max(order_candidates, key=lambda p: p.stat().st_mtime))
+        # fallback: latest any adjustment image
         candidates = [
             *_debug_dir.glob('adjustment_area_*.png'),
             *_debug_dir.glob('popup_crop_*.png'),
@@ -149,7 +159,7 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
             if adj is None:
                 logger.error('[%s] ERROR — Không tìm thấy adjustment data', order_id)
                 # prefer the debug image captured during adjustment search (shows the actual state)
-                _no_adj_crop = _latest_debug_image() or _screenshot_error(order_id, venture, 'no_adjustment')
+                _no_adj_crop = _latest_debug_image(order_id) or _screenshot_error(order_id, venture, 'no_adjustment')
                 _stat('error', order_id=order_id, venture=venture, brand=platform,
                       error='Không tìm thấy adjustment data',
                       crop_path=_no_adj_crop, ocr_lines=[])
@@ -157,19 +167,26 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
 
             # ── Gather debug artefacts ────────────────────────────────────
             _ocr_lines = adj.get('__ocr_lines__', []) if isinstance(adj, dict) else []
-            _crop_path = _latest_debug_image()
+            # Use the crop path embedded in the adj dict (per-order, set during OCR)
+            # Fall back to latest debug image only if not available
+            _crop_path = (adj.get('__crop_path__') if isinstance(adj, dict) else None) or _latest_debug_image(order_id)
 
             # ── Total mismatch check ──────────────────────────────────────
             check = adj.get('__total_check__') if isinstance(adj, dict) else None
             if isinstance(check, dict) and not check.get('matches'):
-                exp = check.get('expected_sum')
+                exp = check.get('expected_sum', 0)
                 got = check.get('total_value')
-                logger.error('[%s] ERROR — Total mismatch: expected %s, sum of items %s', order_id, exp, got)
-                _shot = _screenshot_error(order_id, venture, 'total_mismatch')
-                _stat('error', order_id=order_id, venture=venture, brand=platform,
-                      error=f'Total không khớp: expected {exp}, sum={got}',
-                      crop_path=_crop_path or _shot, ocr_lines=_ocr_lines)
-                continue
+                if exp == 0:
+                    # expected_sum==0 means OCR couldn't read the bold total row — not a real
+                    # mismatch. Proceed with the adjustment item values found.
+                    logger.warning('[%s] WARN — Total row OCR failed (expected=0, sum=%s); proceeding with item values', order_id, got)
+                else:
+                    logger.error('[%s] ERROR — Total mismatch: expected %s, sum of items %s', order_id, exp, got)
+                    _shot = _screenshot_error(order_id, venture, 'total_mismatch')
+                    _stat('error', order_id=order_id, venture=venture, brand=platform,
+                          error=f'Total không khớp: expected {exp}, sum={got}',
+                          crop_path=_crop_path or _shot, ocr_lines=_ocr_lines)
+                    continue
 
             # ── Build gsheet update dict ───────────────────────────────────
             from gsheets.order_adjustment_sheet import GSHEET_COLUMN

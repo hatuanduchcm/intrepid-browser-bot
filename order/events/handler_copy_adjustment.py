@@ -45,7 +45,7 @@ def capture_debug_shots(cx: int, cy: int, pad_w: int = 450, pad_h: int = 600):
     except Exception as e:
         logging.debug('screenshot capture failed: %s', e)
 
-    return crop_path
+    return str(crop_path) if crop_path is not None else None
 
 
 def handle_copy_adjustment_event(event_payload):
@@ -116,17 +116,16 @@ def _hover_and_capture_tooltip(window, venture: str = '', order_id: str = ''):
                     cy = chosen.top + chosen.height // 2
                     pyautogui.moveTo(cx, cy, duration=0.2)
                     pyautogui.click(cx, cy)
-                    time.sleep(0.35)
-                    try:
-                        crop_path = capture_debug_shots(cx, cy)
-                    except Exception:
-                        crop_path = None
+                    # Wait for popup to render before capturing
+                    time.sleep(0.5)
+                    # Popup mode: capture above the ? icon, spread left/right
+                    crop_path = _capture_adjustment_area(cx=cx, cy=cy, popup_mode=True, order_id=order_id)
                 else:
                     # No question icon — capture the visible adjustment block area for OCR
                     logger.debug('question icon not found, capturing adjustment block area for OCR')
                     ref_x = result['x'] if result else None
                     ref_y = result['y'] if result else None
-                    crop_path = _capture_adjustment_area(ref_x, ref_y)
+                    crop_path = _capture_adjustment_area(ref_x, ref_y, order_id=order_id)
             except Exception as e:
                 logger.debug('image locate/click failed: %s', e)
         else:
@@ -134,61 +133,202 @@ def _hover_and_capture_tooltip(window, venture: str = '', order_id: str = ''):
             # capture adjustment block area for OCR (handles all label types)
             ref_x = result['x'] if result else None
             ref_y = result['y'] if result else None
-            crop_path = _capture_adjustment_area(ref_x, ref_y)
+            crop_path = _capture_adjustment_area(ref_x, ref_y, order_id=order_id)
     except Exception as e:
         logger.debug('hover_and_capture failed: %s', e)
 
     return crop_path
 
 
-def _capture_adjustment_area(cx: int = None, cy: int = None) -> Optional[str]:
-    """Capture the adjustment table by locating total_adjustment_row.png.
+def _find_table_bounds(total_row_tpl, reason_row_tpl, ref_y: int = None, screen_h: int = 900):
+    """Find total_row and reason_row matches, filtered by ref_y if given.
 
-    Finds the Total Adjustment Amount row template, then captures:
-    - 3 row-heights above (sub-header + data rows)
-    - through the total row itself
-    - full width (skipping left sidebar and right scrollbar)
+    Returns (top_match, bottom_match) where:
+    - top_match  = adjustment_reason_row (header) — defines y_top
+    - bottom_match = total_adjustment_row — defines y_bottom
 
-    Falls back to a fixed region anchored at (cx, cy) from the block header
-    if the template is not found.
-    Returns path to saved PNG or None on failure.
+    Either may be None if not found.
+    If ref_y is given, only matches on the same side of ref_y as expected are kept:
+    - both templates must be BELOW ref_y (inline mode: ref_y = block header cy)
+    - popup mode: ref_y = None, pick match-pair closest to each other
+    """
+    def _locate(tpl, confidence=0.75):
+        if not tpl.exists():
+            return []
+        try:
+            return list(pyautogui.locateAllOnScreen(str(tpl), confidence=confidence))
+        except Exception as e:
+            logger.debug('locateAllOnScreen %s failed: %s', tpl.name, e)
+            return []
+
+    total_matches  = _locate(total_row_tpl)
+    reason_matches = _locate(reason_row_tpl)
+
+    if ref_y is not None:
+        # Inline mode: keep only matches below the block header
+        total_matches  = [m for m in total_matches  if m.top > ref_y] or total_matches
+        reason_matches = [m for m in reason_matches if m.top > ref_y] or reason_matches
+
+    # Pick best total_match
+    if not total_matches:
+        return None, None
+    if ref_y is not None:
+        # Inline mode: pick total_match closest below the block header
+        total_match = min(total_matches, key=lambda m: abs(m.top - ref_y))
+        # Pick reason_match that is just above total_match (closest above)
+        reason_match = None
+        candidates_above = [m for m in reason_matches if m.top < total_match.top]
+        if candidates_above:
+            reason_match = max(candidates_above, key=lambda m: m.top)
+    else:
+        # Popup mode: find the (reason, total) PAIR with smallest vertical gap —
+        # that's the compact floating popup, not the full inline table which spans
+        # much of the page height.
+        best_pair = (None, None)
+        best_gap = float('inf')
+        for tm in total_matches:
+            candidates = [m for m in reason_matches if m.top < tm.top]
+            if not candidates:
+                continue
+            rm = max(candidates, key=lambda m: m.top)  # closest above tm
+            gap = tm.top - rm.top
+            if gap < best_gap:
+                best_gap = gap
+                best_pair = (rm, tm)
+        reason_match, total_match = best_pair
+        # Fallback: if no paired reason found, just use total closest to center
+        if total_match is None:
+            center_y = screen_h // 2
+            total_match = min(total_matches, key=lambda m: abs((m.top + m.height // 2) - center_y))
+            reason_match = None
+
+    return reason_match, total_match
+
+
+def _capture_adjustment_area(cx: int = None, cy: int = None, popup_mode: bool = False, order_id: str = '') -> Optional[str]:
+    """Capture the adjustment table with pixel-precise boundaries.
+
+    Uses two templates as anchors:
+    - adjustment_reason_row.png  → top boundary
+    - total_adjustment_row.png   → bottom boundary
+
+    popup_mode=True (after clicking ? icon at cx,cy):
+      Capture a region ABOVE the icon, spread left/right — simple and reliable.
+
+    inline mode (cx/cy given, popup_mode=False):
+      Table is below block header → use templates filtered below cy.
+
+    No cx/cy: template-only mode, pick pair closest to screen center.
     """
     _icons_dir = Path(__file__).resolve().parents[2] / 'assets' / 'icons'
-    total_row_tpl = _icons_dir / 'total_adjustment_row.png'
+    total_row_tpl       = _icons_dir / 'total_adjustment_row.png'
+    reason_row_tpl      = _icons_dir / 'adjustment_reason_row.png'
+    released_amt_tpl    = _icons_dir / 'released_amount_col.png'
+
+    def _locate_released_amount_col():
+        """Try to locate the Released Amount column header; return match or None."""
+        if not released_amt_tpl.exists():
+            return None
+        try:
+            return pyautogui.locateOnScreen(str(released_amt_tpl), confidence=0.75)
+        except Exception as e:
+            logger.debug('released_amount_col locate failed: %s', e)
+            return None
 
     try:
         import mss, mss.tools
         screen_w, screen_h = pyautogui.size()
-        x = 50           # skip left sidebar
-        w = screen_w - 150  # skip right scrollbar
 
-        match = None
-        if total_row_tpl.exists():
+        # ── Popup mode: capture above the ? icon ────────────────────────────
+        if popup_mode and cx is not None and cy is not None:
+            pad_w = 500   # spread left/right from icon center
+            pad_h = 550   # height above icon (popup appears above)
+            x1 = max(0, cx - pad_w // 2)
+            w1 = min(pad_w, screen_w - x1)
+            y1 = max(0, cy - pad_h)
+            h1 = min(pad_h, cy)
+            _oid = f'_{order_id}' if order_id else ''
+            crop_path = DEBUG_DIR / f'adjustment_area{_oid}_{int(time.time())}.png'
             try:
-                match = pyautogui.locateOnScreen(str(total_row_tpl), confidence=0.75)
-            except Exception as e:
-                logger.debug('locateOnScreen total_adjustment_row failed: %s', e)
+                with mss.mss() as sct:
+                    mon = {'left': int(x1), 'top': int(y1), 'width': int(w1), 'height': int(h1)}
+                    shot = sct.grab(mon)
+                    mss.tools.to_png(shot.rgb, shot.size, output=str(crop_path))
+            except Exception:
+                shot = pyautogui.screenshot(region=(int(x1), int(y1), int(w1), int(h1)))
+                shot.save(str(crop_path))
+            logger.debug('popup capture above icon: x=%s y=%s w=%s h=%s -> %s', x1, y1, w1, h1, crop_path)
+            return str(crop_path)
 
-        if match:
-            row_h = max(match.height, 35)
-            # 5 rows up: sub-header + up to 4 data rows above the total row
-            y = max(0, match.top - row_h * 5)
-            h = min((match.top + match.height + 5) - y, screen_h - y)
-            # x anchored at the template's left edge = start of "Adjustment Reason" column
-            # (skips the "Adjustment Complete Date" column on the left)
-            x = max(50, match.left)
-            w = screen_w - x - 10
-            logger.debug('total_adjustment_row found at %s, region x=%s y=%s w=%s h=%s', match, x, y, w, h)
+        ref_y = cy  # None for template-only mode, block-header y for inline mode
+        reason_match, total_match = _find_table_bounds(total_row_tpl, reason_row_tpl,
+                                                       ref_y=ref_y, screen_h=screen_h)
+
+        # If inline mode found nothing with ref_y restriction, retry unrestricted
+        # (handles TH / other ventures where coordinates may be slightly off)
+        if not total_match and ref_y is not None:
+            logger.debug('inline template search missed; retrying without ref_y restriction')
+            reason_match, total_match = _find_table_bounds(total_row_tpl, reason_row_tpl,
+                                                           ref_y=None, screen_h=screen_h)
+
+        # ── Try to locate Released Amount column header for right boundary ──
+        released_match = _locate_released_amount_col()
+        if released_match:
+            logger.debug('released_amount_col found: left=%s w=%s', released_match.left, released_match.width)
+
+        def _right_boundary(left_x: int) -> int:
+            """Return right edge: use released_amount_col right edge if available,
+            otherwise fall back to 900px from left or screen edge."""
+            if released_match:
+                return min(released_match.left + released_match.width + 20, screen_w - 5)
+            return left_x + min(900, screen_w - left_x - 20)
+
+        if total_match and reason_match:
+            # ── Best case: both anchors found → pixel-precise crop ────────
+            y      = max(0, reason_match.top - 4)
+            bottom = min(total_match.top + total_match.height + 6, screen_h)
+            h      = bottom - y
+            x      = max(50, min(reason_match.left, total_match.left))
+            right  = _right_boundary(x)
+            w      = right - x
+            logger.debug('precise crop (both templates): x=%s y=%s w=%s h=%s', x, y, w, h)
+
+        elif total_match:
+            # ── Only total row found → estimate top via row height ─────────
+            row_h  = max(total_match.height, 30)
+            y      = max(0, total_match.top - row_h * 12)
+            bottom = min(total_match.top + total_match.height + 6, screen_h)
+            h      = bottom - y
+            x      = max(50, total_match.left)
+            right  = _right_boundary(x)
+            w      = right - x
+            logger.debug('partial crop (total only): x=%s y=%s w=%s h=%s', x, y, w, h)
+
         else:
-            # fallback: skip date column with a fixed left margin
-            logger.debug('total_adjustment_row.png not found, falling back to cy-based capture')
-            ref_y = cy if cy is not None else screen_h // 2
-            x = 380          # skip left sidebar + date column
-            w = screen_w - x - 10
-            y = max(0, ref_y - 20)
-            h = min(500, screen_h - y)
+            # ── No template found → generic fallback ──────────────────────
+            logger.debug('no template match, using generic fallback')
+            if released_match:
+                # Use released_amount_col to pin the right edge; start 900px to its left
+                right = released_match.left + released_match.width + 20
+                x = max(50, right - 900)
+                w = right - x
+            elif cy is not None:
+                x = max(50, cx - 50 if cx else 380)
+                w = min(screen_w - x - 10, 800)
+            else:
+                x = 380
+                w = screen_w - x - 10
+            if cy is not None:
+                # Capture from slightly above the block header (cy) to include the
+                # table header row, then 650px downward
+                y = max(0, cy - 20)
+                h = min(650, screen_h - y)
+            else:
+                y = max(0, screen_h // 4)
+                h = min(600, screen_h - y)
 
-        crop_path = DEBUG_DIR / f'adjustment_area_{int(time.time())}.png'
+        _oid = f'_{order_id}' if order_id else ''
+        crop_path = DEBUG_DIR / f'adjustment_area{_oid}_{int(time.time())}.png'
         try:
             with mss.mss() as sct:
                 mon = {'left': int(x), 'top': int(y), 'width': int(w), 'height': int(h)}
@@ -230,11 +370,18 @@ def find_order_adjustment_block(
             try:
                 match = pyautogui.locateOnScreen(str(_p), confidence=confidence, grayscale=True)
                 if match:
-                    pyautogui.scroll(-200)
+                    # Record coordinates BEFORE any scroll so they are accurate
                     center_x = match.left + match.width // 2
                     center_y = match.top + match.height // 2
-                    pyautogui.click(center_x, center_y)
-                    logger.debug('Found adjustment block via %s', _p.name)
+                    # Scroll slightly so the table rows below become visible
+                    pyautogui.scroll(-200)
+                    time.sleep(0.15)
+                    # Re-locate to get updated on-screen position after scroll
+                    match2 = pyautogui.locateOnScreen(str(_p), confidence=confidence, grayscale=True)
+                    if match2:
+                        center_x = match2.left + match2.width // 2
+                        center_y = match2.top + match2.height // 2
+                    logger.debug('Found adjustment block via %s at (%s, %s)', _p.name, center_x, center_y)
                     return {"found": True, "x": center_x, "y": center_y}
             except Exception as e:
                 logger.debug('locateOnScreen failed for %s: %s', _p.name, e)
@@ -296,6 +443,10 @@ def get_tooltip_data(_path=None, venture: str = ''):
             # __total_check__ is already attached by extract_adjustment_mapping_from_crop
             check = result.get('__total_check__') if isinstance(result, dict) else None
 
+            # Attach crop path so callers can reference the exact image for this result
+            if isinstance(result, dict) and _path:
+                result['__crop_path__'] = _path
+
             # persist only on validation failure to reduce debug clutter
             try:
                 printable = {str(k): v for k, v in result.items()} if isinstance(result, dict) else result
@@ -325,11 +476,9 @@ def get_tooltip_data(_path=None, venture: str = ''):
 
             return result
 
-        # OCR produced no result — no error written, clean up the capture file
-        _cleanup_path()
+        # OCR produced no result — keep the capture file so error detail can display it
     except Exception as e:
         logger.debug('OCR/template fallback failed: %s', e)
-        _cleanup_path()
 
     return None
 
@@ -481,31 +630,22 @@ def parse_lines_to_map(text: str, venture: str = ''):
 
     from utils.amounts import clean_amount
 
-    # Iterate lines first, then check each column for a match
+    # Iterate lines first, then check each column for a match.
+    # Use longest-match-wins so "AMS Commission Fee" matches AMS_COMMISSION_FEE
+    # (label len 18) instead of COMMISSION_FEE (label len 14).
     for i, line in enumerate(lines):
         label_text, numeric = split_text_and_number(line)
         if not label_text or not numeric:
             continue
+        best_cname = None
+        best_len = 0
         for cname, labs in label_map.items():
-            # try direct substring match first
-            matched = False
             for lab in labs:
-                lab_l = lab.lower()
-                if lab_l in label_text:
-                    # val = _re.sub(r"\s+", "", numeric or '')
-                    mapping[cname] = clean_amount(numeric, venture=venture)
-                    # matched = True
-                    break
-            # if matched:
-            #     continue
-            # token-subset fallback
-            # ltokens = set(t for t in _re.split(r"\W+", label_text) if t)
-            # for lab in labs:
-            #     lab_tokens = set(t for t in _re.split(r"\W+", lab.lower()) if t)
-            #     if lab_tokens and lab_tokens <= ltokens:
-            #         # val = _re.sub(r"\s+", "", numeric or '')
-            #         mapping[cname] = drop_first_after_cleanup(numeric)
-            #         break
+                if lab in label_text and len(lab) > best_len:
+                    best_cname = cname
+                    best_len = len(lab)
+        if best_cname is not None:
+            mapping[best_cname] = clean_amount(numeric, venture=venture)
 
     return mapping
 
@@ -532,6 +672,9 @@ _OCR_CURRENCY_NORMALIZE = [
     (_re.compile(r'(?<![\w])#(?=\d)'), '₱'),                     # # before digit → ₱
     (_re.compile(r'(?<!\w)P(?=[-\d])'), '₱'),                    # bare P before digit/minus → ₱ (e.g. P35.00, P-57.00)
     (_re.compile(r'[-+]?₱-(?=\d)'), lambda m: '-₱'),             # collapse double-sign: -₱- or ₱- → -₱
+    # Bold-text OCR: '/' misread as '7' immediately after currency prefix
+    # e.g. "Rp/7.000" → "Rp77.000", "Rp/77.000" → "Rp777.000"
+    (_re.compile(r'(Rp|RM|R\$)\s*/\s*(?=\d)', _re.IGNORECASE), lambda m: m.group(1) + '7'),
 ]
 
 
@@ -554,8 +697,17 @@ def _try_ocr_currency_token(token: str):
     rest = t[m.end():]
     if not rest:
         return None
-    # Apply OCR substitutions on the remainder
-    corrected = rest.translate(_OCR_LETTER_TO_DIGIT)
+    # Heuristic: if rest has NO real digit, letters like O/o are misreads of 9 (not 0).
+    # Rationale: OCR correctly outputs the digit '0' when it sees a zero; the LETTER 'O'
+    # in numeric position means OCR confused the shape of '9' with 'O'.
+    # When real digits exist alongside letters (e.g. '8so'), O→0 is still correct.
+    if not _re.search(r'\d', rest):
+        _token_map = str.maketrans({'O': '9', 'o': '9', 'S': '5', 's': '5',
+                                    't': '1', 'T': '1', 'l': '1', 'I': '1',
+                                    'Z': '2', 'z': '2', 'G': '6', 'g': '9', 'B': '8'})
+    else:
+        _token_map = _OCR_LETTER_TO_DIGIT
+    corrected = rest.translate(_token_map)
     # Accept only if result is all digits (optionally with separators)
     if _re.fullmatch(r'[\d\.,]+', corrected):
         return sign + currency_part + corrected
@@ -577,12 +729,41 @@ def split_text_and_number(line: str):
     # Supports multi-char currency prefixes (Rp, RM, S$) as well as single-char
     # prefixes (฿, đ, d, ...) immediately before the digit sequence.
     # Also handles OCR spacing like 'd9 329' → collapsed to 'd9329'.
-    num_pattern = r"(?:(?<=^)|(?<=\s))[-+]?\s*(?:Rp|RM|S\$|[^\w\s\|]|\w)?\s*\d[\d\.,\s]*"
+    # Extended char class after first digit: also allow oO (OCR zero→O confusion)
+    # and sS (OCR digit→letter confusion in bold text like Rp80.000 → Rp8so.O00).
+    num_pattern = r"(?:(?<=^)|(?<=\s))[-+]?\s*(?:Rp|RM|S\$|[^\w\s\|]|\w)?\s*\d[\d\.,\s oOsS]*"
 
     nums = _re.findall(num_pattern, line)
 
     # collapse internal whitespace in numeric token so 'd9 329' -> 'd9329'
     num = _re.sub(r"\s+", "", nums[-1]).strip() if nums else ''
+
+    # Apply OCR letter→digit correction on the captured numeric token:
+    # o/O → 0 (most common bold-text confusion), s/S → 5 then strip residual non-numeric.
+    # E.g. "Rp8so.O00" → collapse spaces → "Rp8so.O00" → correct → "Rp850.000"
+    #      "Rp8o.O00"  → correct → "Rp80.000" (most common case)
+    # After correction, remove any remaining non-numeric chars (noise letters) so
+    # "Rp8s0.000" (s was noise, not a real 5) still gives valid digits.
+    if num:
+        _pfx_m = _re.match(r'^([-+]?\s*(?:Rp|RM|S\$|B|[^\w\s])?\s*)', num)
+        _pfx = _pfx_m.group(0) if _pfx_m else ''
+        _body = num[len(_pfx):]
+        # Bold-text OCR: a single "0" is sometimes read as two characters "so" or "sO".
+        # Pattern: digit immediately followed by "s/S" then "o/O" → the "s" is OCR noise
+        # for that zero. E.g. "8so" → "8o" → translate o→0 → "80".
+        # This must run BEFORE the s→5 translate so we don't turn the noise "s" into "5".
+        _body = _re.sub(r'(\d)[sS]([oO])', r'\1\2', _body)
+        # Heuristic: if body has NO real digit, O/o are misreads of 9 (not 0).
+        # OCR reads the digit '0' correctly; letter 'O' in numeric context = shape of '9'.
+        # When real digits exist alongside O/o (e.g. '8o.O00'), keep O→0.
+        if not _re.search(r'\d', _body):
+            _body = _body.translate(str.maketrans({'o': '9', 'O': '9', 's': '5', 'S': '5'}))
+        else:
+            _body = _body.translate(str.maketrans({'o': '0', 'O': '0', 's': '5', 'S': '5'}))
+        # strip any remaining non-numeric noise (but keep . , -)
+        _body = _re.sub(r'[^\d.,\-]', '', _body)
+        if _body:
+            num = _pfx.strip() + _body
 
     # remove number block from text
     text_only = _re.sub(num_pattern, " ", line)
@@ -668,7 +849,11 @@ def validate_total_adjustment(parsed: dict):
 
         # skip the authoritative total key and any debug keys when summing
         try:
-            is_total_key = (k == total_key)
+            is_total_key = (
+                k == total_key
+                or getattr(k, 'value', None) == getattr(total_key, 'value', object())
+                or key_str == str(total_key)
+            )
         except Exception:
             is_total_key = False
 

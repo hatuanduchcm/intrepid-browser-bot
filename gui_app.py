@@ -70,11 +70,18 @@ LOCALES = {
 # ── Auto-configure Tesseract: bundled copy takes priority over system install ──
 def _setup_tesseract():
     import pytesseract
+    import glob as _glob
+
+    def _apply(cmd: str, tessdata: str = None):
+        pytesseract.pytesseract.tesseract_cmd = cmd
+        os.environ['TESSERACT_CMD'] = cmd
+        if tessdata:
+            os.environ['TESSDATA_PREFIX'] = tessdata
+
     # 1. Bundled inside exe (PyInstaller _MEIPASS)
     bundled = _BASE_DIR / 'Tesseract-OCR' / 'tesseract.exe'
     if bundled.exists():
-        pytesseract.pytesseract.tesseract_cmd = str(bundled)
-        os.environ['TESSDATA_PREFIX'] = str(_BASE_DIR / 'Tesseract-OCR')
+        _apply(str(bundled), str(_BASE_DIR / 'Tesseract-OCR'))
         return
     # 2. Env override
     env_cmd = os.getenv('TESSERACT_CMD')
@@ -84,7 +91,22 @@ def _setup_tesseract():
     # 3. Default system path
     default = Path(r'C:\Program Files\Tesseract-OCR\tesseract.exe')
     if default.exists():
-        pytesseract.pytesseract.tesseract_cmd = str(default)
+        _apply(str(default))
+        return
+    # 4. Search bundled _internal directories (dev environment fallback)
+    search_roots = [
+        Path.home() / 'Downloads',
+        Path.home() / 'Desktop',
+    ]
+    for root in search_roots:
+        if not root.exists():
+            continue
+        pattern = str(root / '*' / '_internal' / 'Tesseract-OCR' / 'tesseract.exe')
+        hits = sorted(_glob.glob(pattern), key=os.path.getmtime, reverse=True)
+        if hits:
+            found = hits[0]
+            _apply(found, str(Path(found).parent))
+            return
 
 try:
     _setup_tesseract()
@@ -1103,29 +1125,40 @@ class BotApp(tk.Tk):
         info_frame = tk.Frame(top, bg=t["bg2"], pady=8)
         info_frame.pack(fill=tk.X)
 
-        def _inf_lbl(label_key, value, bold=False):
+        def _inf_lbl(label_key, value, bold=False, copyable=False):
             row = tk.Frame(info_frame, bg=t["bg2"])
             row.pack(fill=tk.X, padx=12, pady=1)
             tk.Label(row, text=self._(label_key), bg=t["bg2"], fg=t["fg2"],
                       font=("Segoe UI", 9)).pack(side=tk.LEFT)
-            tk.Label(row, text=value, bg=t["bg2"], fg=t["fg"],
-                      font=("Segoe UI", 9, "bold" if bold else "normal"),
-                      wraplength=480, justify=tk.LEFT).pack(side=tk.LEFT, padx=(4, 0))
+            if copyable:
+                # Use Entry (readonly) so user can click, select, Ctrl+C
+                _var = tk.StringVar(value=value)
+                _ent = tk.Entry(row, textvariable=_var, bg=t["bg2"], fg=t["fg"],
+                                font=("Segoe UI", 9, "bold" if bold else "normal"),
+                                relief=tk.FLAT, bd=0, state="readonly",
+                                readonlybackground=t["bg2"],
+                                width=len(value) + 2)
+                _ent.pack(side=tk.LEFT, padx=(4, 0))
+            else:
+                tk.Label(row, text=value, bg=t["bg2"], fg=t["fg"],
+                          font=("Segoe UI", 9, "bold" if bold else "normal"),
+                          wraplength=480, justify=tk.LEFT).pack(side=tk.LEFT, padx=(4, 0))
 
-        _inf_lbl("stat_label_order",   order_id,  bold=True)
+        _inf_lbl("stat_label_order",   order_id,  bold=True, copyable=True)
         if venture:
-            _inf_lbl("stat_label_venture", venture)
+            _inf_lbl("stat_label_venture", venture, copyable=True)
         if error:
             _inf_lbl("stat_label_error",   error)
 
         # ── Body: image (left) + OCR text (right) ────────────────────────────
         body = tk.Frame(top, bg=t["bg"])
         body.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
-        body.columnconfigure(1, weight=1)
+        body.columnconfigure(0, weight=5)  # image gets most space
+        body.columnconfigure(1, weight=1, minsize=160)  # OCR: narrow fixed strip
         body.rowconfigure(0, weight=1)
 
         # Left: debug image
-        img_frame = tk.Frame(body, bg=t["bg2"], width=320)
+        img_frame = tk.Frame(body, bg=t["bg2"], width=640)
         img_frame.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 6))
         img_frame.pack_propagate(False)
 
@@ -1165,8 +1198,8 @@ class BotApp(tk.Tk):
             if crop_path:
                 try:
                     img = Image.open(crop_path)
-                    # Fit inside 310×200 keeping aspect ratio
-                    img.thumbnail((310, 200), Image.LANCZOS)
+                    # Fit inside 630×500 keeping aspect ratio
+                    img.thumbnail((630, 500), Image.LANCZOS)
                     photo = ImageTk.PhotoImage(img)
                     def _set(p=photo):
                         _img_lbl.configure(image=p, text="")

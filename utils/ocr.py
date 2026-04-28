@@ -7,7 +7,36 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-_TESSERACT_CMD = os.getenv('TESSERACT_CMD', r'C:\Program Files\Tesseract-OCR\tesseract.exe')
+def _get_tesseract_cmd() -> str:
+    """Return the best available tesseract_cmd path, evaluated lazily."""
+    # 1. Explicit env override (set by _setup_tesseract in gui_app or .env)
+    env = os.getenv('TESSERACT_CMD')
+    if env and Path(env).exists():
+        return env
+    # 2. Whatever pytesseract already has configured (may have been set by gui_app._setup_tesseract)
+    try:
+        import pytesseract as _pt
+        if _pt.pytesseract.tesseract_cmd and Path(_pt.pytesseract.tesseract_cmd).exists():
+            return _pt.pytesseract.tesseract_cmd
+    except Exception:
+        pass
+    # 3. Known installation paths (system-wide and user-local)
+    _candidates = [
+        r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+        r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
+        str(Path.home() / r'AppData\Local\Programs\Tesseract-OCR\tesseract.exe'),
+    ]
+    for c in _candidates:
+        if Path(c).exists():
+            return c
+    # 4. Last resort: search bundled _internal directories (dev env)
+    import glob as _glob
+    for root in [Path.home() / 'Downloads', Path.home() / 'Desktop']:
+        hits = sorted(_glob.glob(str(root / '*' / '_internal' / 'Tesseract-OCR' / 'tesseract.exe')),
+                      key=os.path.getmtime, reverse=True)
+        if hits:
+            return hits[0]
+    return r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 
 def ocr_image(path, scale: float = 3.0):
@@ -15,7 +44,7 @@ def ocr_image(path, scale: float = 3.0):
     try:
         import pytesseract
         from PIL import Image
-        pytesseract.pytesseract.tesseract_cmd = _TESSERACT_CMD
+        pytesseract.pytesseract.tesseract_cmd = _get_tesseract_cmd()
         easyocr_reader = None
     except Exception:
         pytesseract = None

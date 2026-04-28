@@ -77,25 +77,45 @@ def handle_open_order_event(event_payload):
                     _icons_dir = Path(__file__).resolve().parents[2] / 'assets' / 'icons'
                     _box_candidates = ['order_id_box.png', 'order_id_box_label.png', 'order_id_box_2.png']
                     m = None
-                    for _candidate in _box_candidates:
-                        _img = _icons_dir / _candidate
-                        if not _img.exists():
-                            logger.debug('%s not found, skipping', _candidate)
-                            continue
+                    for scroll_attempt in range(4):
+                        for _candidate in _box_candidates:
+                            _img = _icons_dir / _candidate
+                            if not _img.exists():
+                                logger.debug('%s not found, skipping', _candidate)
+                                continue
+                            try:
+                                m = pyautogui.locateCenterOnScreen(str(_img), confidence=0.7)
+                                if m:
+                                    logger.debug('Found order ID box via %s', _candidate)
+                                    break
+                                else:
+                                    logger.debug('%s not found on screen', _candidate)
+                            except Exception as e:
+                                logger.debug('Error locating order ID box %s on screen: %s', _candidate, e)
+                        if m:
+                            break
+                        # If not found, scroll down and try again
                         try:
-                            m = pyautogui.locateCenterOnScreen(str(_img), confidence=0.7)
-                            if m:
-                                logger.debug('Found order ID box via %s', _candidate)
-                                break
-                            else:
-                                logger.debug('%s not found on screen', _candidate)
+                            pyautogui.scroll(-300)
+                            time.sleep(0.3)
+                            logger.debug('Scrolled down to search for order ID box (attempt %d)', scroll_attempt+1)
+                            # Always scroll up after scrolling down
+                            pyautogui.scroll(300)
+                            time.sleep(0.2)
+                            logger.debug('Scrolled up after scrolling down (reset view)')
                         except Exception as e:
-                            logger.debug('Error locating order ID box %s on screen: %s', _candidate, e)
+                            logger.debug('scroll down/up while searching order ID box failed: %s', e)
                     if m:
                         pyautogui.moveTo(m.x, m.y, duration=0.5)
                         time.sleep(0.3)
                         pyautogui.click()
                         time.sleep(6)
+                        # Scroll up to ensure adjustment table is visible (for TH)
+                        try:
+                            pyautogui.scroll(500)
+                            time.sleep(0.3)
+                        except Exception as e:
+                            logger.debug('scroll up after opening order detail failed: %s', e)
                         return True
                     else:
                         logger.debug('No order ID box image found on screen after trying all candidates')
@@ -211,35 +231,37 @@ def _select_fulfillment_all() -> bool:
         _icons_dir = Path(__file__).resolve().parents[2] / 'assets' / 'icons'
 
         # Step 1: optionally click the dropdown trigger to open it
-        trigger_img = _icons_dir / 'fulfillment_type_select.png'
+        trigger_img = _icons_dir / 'fulfillment_type_select_box.png'
         if trigger_img.exists():
             try:
                 t = pyautogui.locateCenterOnScreen(str(trigger_img), confidence=0.75)
                 if t:
                     pyautogui.click(t.x, t.y)
                     time.sleep(0.4)
-                    logger.debug('Clicked fulfillment type dropdown trigger')
+                    logger.info('Clicked fulfillment type dropdown trigger')
                 else:
-                    logger.debug('fulfillment_type_select.png not found on screen, skipping trigger click')
+                    logger.info('fulfillment_type_select_box.png not found on screen, skipping trigger click')
             except Exception as e:
                 logger.debug('Could not click fulfillment type trigger: %s', e)
+        else:
+            logger.warning('fulfillment_type_select_box.png not in assets/icons/')
 
         # Step 2: click the 'All' option
-        all_img = _icons_dir / 'fulfillment_all_option.png'
+        all_img = _icons_dir / 'fulfillment_type_option_all.png'
         if all_img.exists():
             try:
                 a = pyautogui.locateCenterOnScreen(str(all_img), confidence=0.75)
                 if a:
                     pyautogui.click(a.x, a.y)
                     time.sleep(0.4)
-                    logger.debug('Selected fulfillment type = All')
+                    logger.info('Selected fulfillment type = All')
                     return True
                 else:
-                    logger.debug('fulfillment_all_option.png not found on screen')
+                    logger.info('fulfillment_type_option_all.png not found on screen')
             except Exception as e:
                 logger.debug('Could not click fulfillment All option: %s', e)
         else:
-            logger.debug('fulfillment_all_option.png not in assets/icons/, skipping fulfillment filter')
+            logger.warning('fulfillment_type_option_all.png not in assets/icons/, skipping fulfillment filter')
     except Exception as e:
         logger.debug('_select_fulfillment_all failed: %s', e)
     return False

@@ -51,6 +51,7 @@ class ColumnName(Enum):
     REFUND_COMPENSATION = 'REFUND_COMPENSATION'
     PARCEL_LOST_COMPENSATION = 'PARCEL_LOST_COMPENSATION'
     LOGISTICS_RELATED_ADJUSTMENT = 'LOGISTICS_RELATED_ADJUSTMENT'
+    RETURN_REFUND_ADJUSTMENT = 'RETURN_REFUND_ADJUSTMENT'
     OTHERS = 'OTHERS'
 
 
@@ -58,7 +59,7 @@ class ColumnName(Enum):
 #  - ADJUSTMENT_COLUMNS: ColumnName -> list of Shopee label variants
 #  - GSHEET_COLUMN: ColumnName -> GSheet header string
 ADJUSTMENT_COLUMNS = {
-    ColumnName.REFUND_AMOUNT: ["Refund Amount"],
+    ColumnName.REFUND_AMOUNT: ["Refund Amount", "RefundAmount"],
     ColumnName.SHIPPING_FEE_CHARGED_BY_LOGISTIC: ["Shipping Fee Charged by Logistic Provider", "Shipping Fee Charged by Logistic", "Shipping Fee Charged"],
     ColumnName.SHIPPING_FEE_REBATE_FROM_SHOPEE: ["Shipping Fee Rebate From Shopee", "Shipping Fee Rebate From", "Shipping Fee Rebate"],
     ColumnName.SHIPPING_REBATE_FROM_SHOPEE: ["Shipping Rebate From Shopee", "Shipping Rebate From"],
@@ -85,7 +86,8 @@ ADJUSTMENT_COLUMNS = {
     ColumnName.TOTAL_ADJUSTMENT_AMOUNT: ["Total Adjustment Amount"],
     ColumnName.REFUND_COMPENSATION: ["Grace Period Return/Refund Compensation", "Return/Refund Compensation", "Refund Compensation"],
     ColumnName.PARCEL_LOST_COMPENSATION: ["Compensation as Parcel was Lost"],
-    ColumnName.LOGISTICS_RELATED_ADJUSTMENT: ["Logistics Related Adjustment"],
+    ColumnName.LOGISTICS_RELATED_ADJUSTMENT: ["Logistics Related Compensation", "Logistics Related Adjustment"],
+    ColumnName.RETURN_REFUND_ADJUSTMENT: ["Return Refund Adjustment/Compensation", "Return Refund Adjustment", "Return/Refund Adjustment"],
     ColumnName.OTHERS: ["Others"],
 }
 
@@ -119,6 +121,7 @@ GSHEET_COLUMN = {
     ColumnName.REFUND_COMPENSATION: "Refund Compensation",
     ColumnName.PARCEL_LOST_COMPENSATION: "Compensation as Parcel was Lost",
     ColumnName.LOGISTICS_RELATED_ADJUSTMENT: "Logistics Related Adjustment",
+    ColumnName.RETURN_REFUND_ADJUSTMENT: "Return Refund Adjustment",
     ColumnName.OTHERS: "Others",
 }
 
