@@ -43,6 +43,7 @@
   "stat_label_venture": "Venture:",
   "stat_label_error": "Error:",
   "stat_label_ocr":   "OCR Data:",
+  "stat_label_parsed_mapping": "Parsed mapping (column & value):",
 
   "settings_dialog_title": "Settings",
   "settings_section_gsheet": "Google Sheet",

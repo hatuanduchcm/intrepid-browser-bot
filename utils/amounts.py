@@ -37,6 +37,39 @@ def clean_amount(amount: Optional[str], venture: str = '') -> Optional[str]:
 
         raw = str(amount).strip()
 
+        # --- PH-specific: mạnh tay chuẩn hóa số bị tách, ký tự lạ ---
+        if venture.upper() == 'PH' and raw:
+            import re as _re
+            # Loại bỏ các ký tự lạ sau P/₱ (dấu nháy, ký tự unicode, ký tự không phải số, dấu, hoặc tiền tệ)
+            raw = _re.sub(r"([P₱])[\'\u2018\u2019\u02bc\u0060\u00b4\u2032\u2035]+", r"\1", raw)
+            # PH-specific: robustly strip Peso prefix with stray apostrophe/quote (trước khi xử lý số)
+            peso_prefix = _re.compile(r"^P[\'\u2018\u2019\u02bc\u0060\u00b4\u2032\u2035]?")
+            m_prefix = peso_prefix.match(raw)
+            if m_prefix:
+                raw = raw[m_prefix.end():].lstrip()
+            # Chỉ giữ lại số, dấu chấm, phẩy, trừ, và ký hiệu tiền tệ, loại bỏ ký tự lạ khác
+            raw = _re.sub(r"[^\d.,\-]", "", raw)
+            # Thay mọi dấu '/' thành '7' nếu nằm giữa số
+            raw = _re.sub(r'(?<=\d)/(\d)', r'7\1', raw)
+            # Thay mọi dấu ',' thành '7' nếu nằm giữa số
+            raw = _re.sub(r'(?<=\d),(\d)', r'7\1', raw)
+            # Các ký tự dễ nhầm với 1 (l, I, |) vẫn thay thành '1' như cũ
+            raw = _re.sub(r'(\d)[lI|](?=[.,]\d{2})', r'\g<1>1', raw)
+            raw = raw.replace(' ', '')
+            # Nếu không có dấu phẩy thì nối 2 nhóm cuối trước dấu thập phân nếu có nhiều nhóm
+            if ',' not in raw:
+                m2 = re.match(r'(-?)(\d+)[.,](\d{2})$', raw)
+                if m2:
+                    sign = m2.group(1)
+                    int_part = m2.group(2)
+                    dec_part = m2.group(3)
+                    # Nếu phần nguyên có 4 số, lấy 2 số cuối; >4 số thì lấy 3 số cuối; <=3 số giữ nguyên
+                    if len(int_part) == 4:
+                        int_part = int_part[1:]
+                    elif len(int_part) > 4:
+                        int_part = int_part[-3:]
+                    raw = sign + int_part + '.' + dec_part
+
         # detach leading sign
         sign = ''
         if raw.startswith('-'):
@@ -46,11 +79,23 @@ def clean_amount(amount: Optional[str], venture: str = '') -> Optional[str]:
         # --- Mode 1: explicit currency prefix ---
         has_prefix = False
 
-        for prefix in _MULTI_PREFIXES:
-            if raw.startswith(prefix):
-                raw = raw[len(prefix):].lstrip()
+
+        # --- PH-specific: robustly strip Peso prefix with stray apostrophe/quote ---
+        if venture.upper() == 'PH':
+            # Remove P', P’, P`, P´, P′, P‵, etc. as prefix
+            import re as _re
+            peso_prefix = _re.compile(r"^P[\'\u2018\u2019\u02bc\u0060\u00b4\u2032\u2035]?")
+            m = peso_prefix.match(raw)
+            if m:
+                raw = raw[m.end():].lstrip()
                 has_prefix = True
-                break
+
+        if not has_prefix:
+            for prefix in _MULTI_PREFIXES:
+                if raw.startswith(prefix):
+                    raw = raw[len(prefix):].lstrip()
+                    has_prefix = True
+                    break
 
         if not has_prefix and raw and not raw[0].isdigit():
             raw = raw[1:].lstrip()

@@ -50,7 +50,7 @@ def ocr_image(path, scale: float = 3.0):
         pytesseract = None
         try:
             import easyocr
-            easyocr_reader = easyocr.Reader(['en', 'vie', 'vi'], gpu=False)
+            easyocr_reader = easyocr.Reader(['en'], gpu=True)
         except Exception:
             easyocr_reader = None
 
@@ -65,6 +65,14 @@ def ocr_image(path, scale: float = 3.0):
         proc_path = p.parent / f'proc_{p.stem}.png'
         cv2.imwrite(str(proc_path), th)
 
+        # Save processed image with 300 DPI using PIL (for debugging or downstream use)
+        try:
+            from PIL import Image as PILImage
+            pil_img = PILImage.fromarray(th)
+            pil_img.save(str(proc_path), dpi=(300, 300))
+        except Exception:
+            # Fallback: save with OpenCV if PIL fails (no DPI info)
+            cv2.imwrite(str(proc_path), th)
         text = None
         if pytesseract:
             try:

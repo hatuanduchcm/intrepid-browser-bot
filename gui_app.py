@@ -888,7 +888,7 @@ class BotApp(tk.Tk):
         )
         self._progress.pack(fill=tk.X, padx=16, pady=(0, 4))
 
-        # ── Stats panel ───────────────────────────────────────────────────────
+        # ── Stats panel + Error list + Log output (with resizable splitter) ──
         self._stats_lf = self._reg(tk.LabelFrame(
             self, text=self._("section_stats"), font=("Segoe UI", 10),
             bg=t["bg"], fg=t["label_frame"], bd=1, relief=tk.GROOVE
@@ -898,6 +898,10 @@ class BotApp(tk.Tk):
         # Row: three count badges
         counts_row = self._reg(tk.Frame(self._stats_lf, bg=t["bg"]), "bg")
         counts_row.pack(fill=tk.X, padx=6, pady=(4, 2))
+
+        # PanedWindow for error list and log (vertical split, user can drag)
+        self._main_pane = tk.PanedWindow(self, orient=tk.VERTICAL, sashrelief=tk.RAISED, sashwidth=6, showhandle=True, bg=t["bg"])
+        self._main_pane.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 8))
 
         self._stat_skip_var    = tk.StringVar(value=f"{self._('stat_skip')}: 0")
         self._stat_success_var = tk.StringVar(value=f"{self._('stat_success')}: 0")
@@ -922,7 +926,7 @@ class BotApp(tk.Tk):
         self._stat_error_lbl.bind("<Button-1>", self._on_error_label_click)
 
         # Error list (hidden until first error appears)
-        self._error_list_frame = tk.Frame(self._stats_lf, bg=t["bg"])
+        self._error_list_frame = tk.Frame(self._main_pane, bg=t["bg"])
         # Do NOT pack yet — shown dynamically when errors arrive
 
         _err_lf = self._reg(tk.LabelFrame(
@@ -931,27 +935,27 @@ class BotApp(tk.Tk):
             font=("Segoe UI", 9),
             bg=t["bg"], fg=t["log_error"], bd=1, relief=tk.GROOVE,
         ), "lf_error_list")
-        _err_lf.pack(fill=tk.X, padx=4, pady=(0, 4))
+        _err_lf.pack(fill=tk.BOTH, expand=True, padx=4, pady=(0, 4))
 
         self._error_listbox = tk.Listbox(
-            _err_lf, height=4, selectmode=tk.SINGLE,
+            _err_lf, height=8, selectmode=tk.SINGLE,
             bg=t["bg3"], fg=t["fg"], font=("Consolas", 9),
             relief=tk.FLAT, bd=0, activestyle="none",
             selectbackground=t["bg2"], selectforeground=t["log_error"],
         )
         _err_scroll = ttk.Scrollbar(_err_lf, command=self._error_listbox.yview)
         self._error_listbox.configure(yscrollcommand=_err_scroll.set)
-        self._error_listbox.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0), pady=4)
+        self._error_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(4, 0), pady=4)
         _err_scroll.pack(side=tk.RIGHT, fill=tk.Y, pady=4)
         self._error_listbox.bind("<<ListboxSelect>>", self._on_error_click)
 
-        # ── Log output ────────────────────────────────────────────────────────
+        # Log output (in a frame for paned window)
         self._log_lf = self._reg(tk.LabelFrame(
-            self, text=self._("section_log"), font=("Segoe UI", 10),
+            self._main_pane, text=self._("section_log"), font=("Segoe UI", 10),
             bg=t["bg"], fg=t["label_frame"], bd=1, relief=tk.GROOVE
         ), "lf_log")
         log_frame = self._log_lf
-        log_frame.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 16))
+        log_frame.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
 
         self._log_text = self._reg(scrolledtext.ScrolledText(
             log_frame, bg=t["bg3"], fg=t["fg"],
@@ -963,6 +967,10 @@ class BotApp(tk.Tk):
         self._log_text.tag_config("WARNING", foreground=t["log_warning"])
         self._log_text.tag_config("INFO",    foreground=t["log_info"])
         self._log_text.tag_config("DEBUG",   foreground=t["log_debug"])
+
+        # Add error list and log to paned window (default sizes)
+        self._main_pane.add(self._error_list_frame, minsize=80, height=120)
+        self._main_pane.add(self._log_lf, minsize=80, height=220)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -1052,7 +1060,7 @@ class BotApp(tk.Tk):
         self._stat_success_var.set(f"{self._('stat_success')}: 0")
         self._stat_error_var.set(f"{self._('stat_error')}: 0")
         self._error_listbox.delete(0, tk.END)
-        self._error_list_frame.pack_forget()
+        # Always keep error list frame in PanedWindow; do not hide
 
     def _update_stat_labels(self):
         self._stat_skip_var.set(f"{self._('stat_skip')}: {self._stat_skip}")
@@ -1087,9 +1095,6 @@ class BotApp(tk.Tk):
             prefix = f"[{' | '.join(parts)}] " if parts else ""
             tag = f"  {prefix}{order_id}" + (f"  — {err_short}" if err_short else "")
             self._error_listbox.insert(tk.END, tag)
-            if len(self._stat_errors) == 1:
-                # show the error list frame for the first time
-                self._error_list_frame.pack(fill=tk.X, padx=4, pady=(0, 2))
         self._update_stat_labels()
 
     def _on_error_label_click(self, _event=None):
@@ -1106,65 +1111,68 @@ class BotApp(tk.Tk):
         if idx < len(self._stat_errors):
             self._show_error_detail(self._stat_errors[idx])
 
+
     def _show_error_detail(self, ev: dict):
-        """Open a Toplevel window showing error details, OCR text, and the debug image."""
+        """Open a Toplevel window showing error details, OCR text, parsed mapping, and the debug image."""
         t = self._theme
         order_id = ev.get('order_id', '?')
         venture  = ev.get('venture', '')
         error    = ev.get('error', '')
         crop_path = ev.get('crop_path')
         ocr_lines = ev.get('ocr_lines') or []
+        parsed_mapping = ev.get('parsed_mapping')
 
         top = tk.Toplevel(self)
         top.title(f"{self._('stat_detail_title')} — {order_id}")
         top.configure(bg=t["bg"])
         top.resizable(True, True)
-        top.minsize(520, 360)
+        top.minsize(800, 400)
 
-        # ── Header info ──────────────────────────────────────────────────────
+        # Header info
         info_frame = tk.Frame(top, bg=t["bg2"], pady=8)
         info_frame.pack(fill=tk.X)
-
         def _inf_lbl(label_key, value, bold=False, copyable=False):
             row = tk.Frame(info_frame, bg=t["bg2"])
             row.pack(fill=tk.X, padx=12, pady=1)
-            tk.Label(row, text=self._(label_key), bg=t["bg2"], fg=t["fg2"],
-                      font=("Segoe UI", 9)).pack(side=tk.LEFT)
+            tk.Label(row, text=self._(label_key), bg=t["bg2"], fg=t["fg2"], font=("Segoe UI", 9)).pack(side=tk.LEFT)
             if copyable:
-                # Use Entry (readonly) so user can click, select, Ctrl+C
                 _var = tk.StringVar(value=value)
-                _ent = tk.Entry(row, textvariable=_var, bg=t["bg2"], fg=t["fg"],
-                                font=("Segoe UI", 9, "bold" if bold else "normal"),
-                                relief=tk.FLAT, bd=0, state="readonly",
-                                readonlybackground=t["bg2"],
-                                width=len(value) + 2)
+                _ent = tk.Entry(row, textvariable=_var, bg=t["bg2"], fg=t["fg"], font=("Segoe UI", 9, "bold" if bold else "normal"), relief=tk.FLAT, bd=0, state="readonly", readonlybackground=t["bg2"], width=len(value) + 2)
                 _ent.pack(side=tk.LEFT, padx=(4, 0))
             else:
-                tk.Label(row, text=value, bg=t["bg2"], fg=t["fg"],
-                          font=("Segoe UI", 9, "bold" if bold else "normal"),
-                          wraplength=480, justify=tk.LEFT).pack(side=tk.LEFT, padx=(4, 0))
-
+                tk.Label(row, text=value, bg=t["bg2"], fg=t["fg"], font=("Segoe UI", 9, "bold" if bold else "normal"), wraplength=480, justify=tk.LEFT).pack(side=tk.LEFT, padx=(4, 0))
         _inf_lbl("stat_label_order",   order_id,  bold=True, copyable=True)
         if venture:
             _inf_lbl("stat_label_venture", venture, copyable=True)
         if error:
             _inf_lbl("stat_label_error",   error)
 
-        # ── Body: image (left) + OCR text (right) ────────────────────────────
-        body = tk.Frame(top, bg=t["bg"])
-        body.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
-        body.columnconfigure(0, weight=5)  # image gets most space
-        body.columnconfigure(1, weight=1, minsize=160)  # OCR: narrow fixed strip
-        body.rowconfigure(0, weight=1)
+        # Main 3-column layout (always grid, image centered, no vertical stacking)
+        main_frame = tk.Frame(top, bg=t["bg"])
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        for i in range(3):
+            main_frame.columnconfigure(i, weight=1, uniform="col")
+        main_frame.rowconfigure(0, weight=1)
 
-        # Left: debug image
-        img_frame = tk.Frame(body, bg=t["bg2"], width=640)
-        img_frame.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 6))
-        img_frame.pack_propagate(False)
+        # (1) Parsed mapping (left)
+        mapping_frame = tk.Frame(main_frame, bg=t["bg"])
+        mapping_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=0)
+        tk.Label(mapping_frame, text=self._("stat_label_parsed_mapping") or "Parsed Mapping", bg=t["bg"], fg=t["fg2"], font=("Segoe UI", 9, "bold")).pack(anchor=tk.W, pady=(0, 4))
+        if parsed_mapping:
+            for k, v in parsed_mapping.items():
+                row = tk.Frame(mapping_frame, bg=t["bg"])
+                row.pack(fill=tk.X, padx=0, pady=1)
+                tk.Label(row, text=str(k), bg=t["bg"], fg=t["fg2"], font=("Consolas", 9, "bold"), width=28, anchor=tk.W).pack(side=tk.LEFT)
+                tk.Label(row, text=str(v), bg=t["bg"], fg=t["fg"], font=("Consolas", 9), anchor=tk.W).pack(side=tk.LEFT, padx=(8, 0))
 
-        _img_lbl = tk.Label(img_frame, bg=t["bg2"], cursor="hand2")
-        _img_lbl.pack(expand=True)
-
+        # (2) Image (center, always centered)
+        img_frame = tk.Frame(main_frame, bg=t["bg"])
+        img_frame.grid(row=0, column=1, sticky="nsew", padx=0, pady=0)
+        img_frame.grid_propagate(True)
+        img_frame.rowconfigure(0, weight=1)
+        img_frame.columnconfigure(0, weight=1)
+        _img_lbl = tk.Label(img_frame, bg=t["bg"], cursor="hand2", bd=0, highlightthickness=0, anchor="center")
+        _img_lbl.grid(row=0, column=0, sticky="nsew")
         def _open_full_image():
             if not crop_path:
                 return
@@ -1173,8 +1181,6 @@ class BotApp(tk.Tk):
                 full_win.title("Screenshot")
                 full_win.configure(bg=t["bg3"])
                 full_win.resizable(True, True)
-
-                # Open original at full size, fit to 90% of screen
                 pil_full = Image.open(crop_path)
                 sw = full_win.winfo_screenwidth()
                 sh = full_win.winfo_screenheight()
@@ -1182,7 +1188,6 @@ class BotApp(tk.Tk):
                 max_h = int(sh * 0.9)
                 pil_full.thumbnail((max_w, max_h), Image.LANCZOS)
                 full_photo = ImageTk.PhotoImage(pil_full)
-
                 full_win.geometry(f"{pil_full.width}x{pil_full.height}")
                 lbl = tk.Label(full_win, image=full_photo, bg=t["bg3"])
                 lbl._photo_ref = full_photo
@@ -1190,46 +1195,33 @@ class BotApp(tk.Tk):
                 lbl.bind("<Button-1>", lambda _: full_win.destroy())
             except Exception as err:
                 messagebox.showerror("Lỗi", str(err), parent=top)
-
         _img_lbl.bind("<Button-1>", lambda _: _open_full_image())
-
-        # Load image in background so dialog opens instantly
         def _load_image():
             if crop_path:
                 try:
                     img = Image.open(crop_path)
-                    # Fit inside 630×500 keeping aspect ratio
-                    img.thumbnail((630, 500), Image.LANCZOS)
+                    img.thumbnail((340, 340), Image.LANCZOS)
                     photo = ImageTk.PhotoImage(img)
                     def _set(p=photo):
-                        _img_lbl.configure(image=p, text="")
+                        _img_lbl.configure(image=p, text="", bd=0, highlightthickness=0)
                         _img_lbl._photo_ref = p
                     top.after(0, _set)
                     return
                 except Exception:
                     pass
             def _no_img():
-                _img_lbl.configure(text=self._("stat_no_image"),
-                                   fg=t["fg2"], font=("Segoe UI", 9))
+                _img_lbl.configure(text=self._("stat_no_image"), fg=t["fg2"], font=("Segoe UI", 9), bd=0, highlightthickness=0)
             top.after(0, _no_img)
-
         threading.Thread(target=_load_image, daemon=True).start()
 
-        # Right: OCR lines
-        ocr_frame = tk.Frame(body, bg=t["bg"])
-        ocr_frame.grid(row=0, column=1, sticky=tk.NSEW)
-
-        tk.Label(ocr_frame, text=self._("stat_label_ocr"),
-                 bg=t["bg"], fg=t["fg2"], font=("Segoe UI", 9)).pack(anchor=tk.W)
-
-        ocr_box = scrolledtext.ScrolledText(
-            ocr_frame, bg=t["bg3"], fg=t["fg"],
-            font=("Consolas", 9), relief=tk.FLAT, wrap=tk.WORD,
-        )
+        # (3) OCR lines (right)
+        ocr_frame = tk.Frame(main_frame, bg=t["bg"])
+        ocr_frame.grid(row=0, column=2, sticky="nsew", padx=(8, 0), pady=0)
+        tk.Label(ocr_frame, text=self._("stat_label_ocr"), bg=t["bg"], fg=t["fg2"], font=("Segoe UI", 9)).pack(anchor=tk.W, pady=(0, 4))
+        ocr_box = scrolledtext.ScrolledText(ocr_frame, bg=t["bg3"], fg=t["fg"], font=("Consolas", 9), relief=tk.FLAT, wrap=tk.WORD)
         ocr_box.pack(fill=tk.BOTH, expand=True)
         ocr_content = "\n".join(ocr_lines) if ocr_lines else "—"
         ocr_box.insert(tk.END, ocr_content)
-        # Keep NORMAL so the user can select and Ctrl+C; block actual typing
         ocr_box.bind("<Key>", lambda e: "break" if e.state & 0x4 == 0 else None)
 
     # ── Process suspend/resume (Windows) ─────────────────────────────────────

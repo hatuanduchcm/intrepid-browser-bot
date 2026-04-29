@@ -645,7 +645,12 @@ def parse_lines_to_map(text: str, venture: str = ''):
                     best_cname = cname
                     best_len = len(lab)
         if best_cname is not None:
-            mapping[best_cname] = clean_amount(numeric, venture=venture)
+            # Always keep decimal string for PH (with dot), not integer
+            cleaned = clean_amount(numeric, venture=venture)
+            if venture.upper() == 'PH' and cleaned is not None:
+                mapping[best_cname] = cleaned  # e.g. -4642.17
+            else:
+                mapping[best_cname] = cleaned
 
     return mapping
 
@@ -725,51 +730,30 @@ def split_text_and_number(line: str):
     # Remove special | character that may interfere with OCR parsing, replacing it with a space to preserve word boundaries
     line = line.replace('|', '')
 
-    # match number-like block (keep raw format including $, ₫, -, ., etc.)
-    # Supports multi-char currency prefixes (Rp, RM, S$) as well as single-char
-    # prefixes (฿, đ, d, ...) immediately before the digit sequence.
-    # Also handles OCR spacing like 'd9 329' → collapsed to 'd9329'.
-    # Extended char class after first digit: also allow oO (OCR zero→O confusion)
-    # and sS (OCR digit→letter confusion in bold text like Rp80.000 → Rp8so.O00).
     num_pattern = r"(?:(?<=^)|(?<=\s))[-+]?\s*(?:Rp|RM|S\$|[^\w\s\|]|\w)?\s*\d[\d\.,\s oOsS]*"
-
     nums = _re.findall(num_pattern, line)
-
-    # collapse internal whitespace in numeric token so 'd9 329' -> 'd9329'
     num = _re.sub(r"\s+", "", nums[-1]).strip() if nums else ''
 
-    # Apply OCR letter→digit correction on the captured numeric token:
-    # o/O → 0 (most common bold-text confusion), s/S → 5 then strip residual non-numeric.
-    # E.g. "Rp8so.O00" → collapse spaces → "Rp8so.O00" → correct → "Rp850.000"
-    #      "Rp8o.O00"  → correct → "Rp80.000" (most common case)
-    # After correction, remove any remaining non-numeric chars (noise letters) so
-    # "Rp8s0.000" (s was noise, not a real 5) still gives valid digits.
     if num:
         _pfx_m = _re.match(r'^([-+]?\s*(?:Rp|RM|S\$|B|[^\w\s])?\s*)', num)
         _pfx = _pfx_m.group(0) if _pfx_m else ''
         _body = num[len(_pfx):]
-        # Bold-text OCR: a single "0" is sometimes read as two characters "so" or "sO".
-        # Pattern: digit immediately followed by "s/S" then "o/O" → the "s" is OCR noise
-        # for that zero. E.g. "8so" → "8o" → translate o→0 → "80".
-        # This must run BEFORE the s→5 translate so we don't turn the noise "s" into "5".
         _body = _re.sub(r'(\d)[sS]([oO])', r'\1\2', _body)
-        # Heuristic: if body has NO real digit, O/o are misreads of 9 (not 0).
-        # OCR reads the digit '0' correctly; letter 'O' in numeric context = shape of '9'.
-        # When real digits exist alongside O/o (e.g. '8o.O00'), keep O→0.
         if not _re.search(r'\d', _body):
             _body = _body.translate(str.maketrans({'o': '9', 'O': '9', 's': '5', 'S': '5'}))
         else:
             _body = _body.translate(str.maketrans({'o': '0', 'O': '0', 's': '5', 'S': '5'}))
-        # strip any remaining non-numeric noise (but keep . , -)
         _body = _re.sub(r'[^\d.,\-]', '', _body)
         if _body:
             num = _pfx.strip() + _body
 
-    # remove number block from text
-    text_only = _re.sub(num_pattern, " ", line)
+    # Fallback: if still no num, try to extract trailing number (e.g. 'FP86.00' -> '86.00')
+    if not num:
+        m = _re.search(r'([-+]?\d+[\d.,]*\d)', line)
+        if m:
+            num = m.group(1)
 
     # Fallback: primary regex missed because OCR confused digits with letters (e.g. "Bt" = "฿1").
-    # Scan remaining words in text_only for a currency-prefixed OCR-confused token.
     if not num:
         for word in _re.split(r'\s+', line.strip()):
             corrected = _try_ocr_currency_token(word)
@@ -777,10 +761,10 @@ def split_text_and_number(line: str):
                 num = corrected
                 text_only = line.replace(word, ' ')
                 break
+    else:
+        text_only = _re.sub(num_pattern, " ", line)
 
-    # normalize whitespace only
-    text_only = text_only.strip().lower()
-
+    text_only = text_only.strip().lower() if 'text_only' in locals() else line.strip().lower()
     return text_only, num
 
 def validate_total_adjustment(parsed: dict):
@@ -797,12 +781,17 @@ def validate_total_adjustment(parsed: dict):
 
     from decimal import Decimal, ROUND_HALF_UP
 
-    def to_num(s):
+
+    def to_num(s, venture=None):
         if not s:
             return Decimal(0)
         ss = str(s)
-        # remove common thousand separators and currency letters
-        ss = ss.replace(',', '').replace('.', '').replace('₫', '').replace('đ', '')
+        # For PH: only remove commas, keep dot as decimal separator
+        # For others: remove both dot and comma
+        if venture and str(venture).upper() == 'PH':
+            ss = ss.replace(',', '').replace('₫', '').replace('đ', '')
+        else:
+            ss = ss.replace(',', '').replace('.', '').replace('₫', '').replace('đ', '')
         import re as __re
         ss = __re.sub(r"\s+", "", ss)
 
@@ -818,10 +807,21 @@ def validate_total_adjustment(parsed: dict):
             m = __re.search(r"-?\d+[\d\.]*", ss)
             return Decimal(m.group(0)) if m else Decimal(0)
 
+    # Try to get venture from parsed if available, else default to None
+    venture = parsed.get('__venture__', None)
+    # Helper: for PH, convert decimal string to integer centavos (multiply by 100)
+    def to_int_cents(val, venture):
+        if venture and str(venture).upper() == 'PH':
+            return int((Decimal(val) * 100).to_integral_value(rounding=ROUND_HALF_UP))
+        return int(Decimal(val).to_integral_value(rounding=ROUND_HALF_UP))
+
     # allow keys as enum, string(enum), or header string
+    # Try to get venture from parsed if available, else default to None
+    venture = parsed.get('__venture__', None)
+
     total_val = None
     if total_key in parsed:
-        total_val = to_num(parsed.get(total_key))
+        total_val = to_num(parsed.get(total_key), venture)
     else:
         try:
             from gsheets.order_adjustment_sheet import GSHEET_COLUMN
@@ -829,23 +829,23 @@ def validate_total_adjustment(parsed: dict):
         except Exception:
             header = None
         if str(total_key) in parsed:
-            total_val = to_num(parsed.get(str(total_key)))
+            total_val = to_num(parsed.get(str(total_key)), venture)
         elif header and header in parsed:
-            total_val = to_num(parsed.get(header))
+            total_val = to_num(parsed.get(header), venture)
         else:
-            total_val = to_num(parsed.get(total_key, '0'))
+            total_val = to_num(parsed.get(total_key, '0'), venture)
     s = Decimal(0)
     # also build per-key converted map for logging
     converted_map = {}
     for k, v in parsed.items():
         try:
-            nv = to_num(v)
+            nv = to_num(v, venture)
         except Exception:
             nv = Decimal(0)
         key_str = str(k)
         # skip internal/debug keys (like __ocr_lines__, __total_check__) from logging and summing
         if not key_str.startswith('__'):
-            converted_map[key_str] = int(nv.to_integral_value(rounding=ROUND_HALF_UP))
+            converted_map[key_str] = to_int_cents(nv, venture)
 
         # skip the authoritative total key and any debug keys when summing
         try:
@@ -861,15 +861,14 @@ def validate_total_adjustment(parsed: dict):
             continue
 
         s += nv
-    # money is integer (smallest currency unit); compare as integers
+    # For PH, sum and total should be compared as integer centavos
     try:
-        sum_others_int = int(s.to_integral_value(rounding=ROUND_HALF_UP))
-        total_val_int = int(Decimal(total_val).to_integral_value(rounding=ROUND_HALF_UP))
+        sum_others_int = to_int_cents(s, venture)
+        total_val_int = to_int_cents(total_val, venture)
     except Exception:
         sum_others_int = int(s)
         total_val_int = int(total_val)
 
-    # expected_sum should come from TOTAL_ADJUSTMENT_AMOUNT; compare with sum of other values
     matches = (total_val_int == sum_others_int)
 
     if not matches:

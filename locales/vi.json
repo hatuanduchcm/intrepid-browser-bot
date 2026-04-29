@@ -43,6 +43,7 @@
   "stat_label_venture": "Venture:",
   "stat_label_error": "Lỗi:",
   "stat_label_ocr":   "Dữ liệu OCR:",
+  "stat_label_parsed_mapping": "Kết quả parse (cột & giá trị):",
 
   "settings_dialog_title": "Cài đặt",
   "settings_section_gsheet": "Google Sheet",

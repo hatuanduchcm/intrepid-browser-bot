@@ -161,12 +161,16 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
                 # prefer the debug image captured during adjustment search (shows the actual state)
                 _no_adj_crop = _latest_debug_image(order_id) or _screenshot_error(order_id, venture, 'no_adjustment')
                 _stat('error', order_id=order_id, venture=venture, brand=platform,
-                      error='Không tìm thấy adjustment data',
-                      crop_path=_no_adj_crop, ocr_lines=[])
+                    error='Không tìm thấy adjustment data',
+                    crop_path=_no_adj_crop, ocr_lines=[], parsed_mapping=None)
                 continue
 
             # ── Gather debug artefacts ────────────────────────────────────
             _ocr_lines = adj.get('__ocr_lines__', []) if isinstance(adj, dict) else []
+            # Extract parsed mapping for debug (exclude __ keys)
+            parsed_mapping = None
+            if isinstance(adj, dict):
+                parsed_mapping = {str(k): v for k, v in adj.items() if not str(k).startswith('__')}
             # Use the crop path embedded in the adj dict (per-order, set during OCR)
             # Fall back to latest debug image only if not available
             _crop_path = (adj.get('__crop_path__') if isinstance(adj, dict) else None) or _latest_debug_image(order_id)
@@ -185,7 +189,7 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
                     _shot = _screenshot_error(order_id, venture, 'total_mismatch')
                     _stat('error', order_id=order_id, venture=venture, brand=platform,
                           error=f'Total không khớp: expected {exp}, sum={got}',
-                          crop_path=_crop_path or _shot, ocr_lines=_ocr_lines)
+                          crop_path=_crop_path or _shot, ocr_lines=_ocr_lines, parsed_mapping=parsed_mapping)
                     continue
 
             # ── Build gsheet update dict ───────────────────────────────────
@@ -204,11 +208,11 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
 
             if not updates:
                 logger.error('[%s] ERROR — Không build được updates từ adj: %s', order_id,
-                             {str(k): v for k, v in adj.items() if not str(k).startswith('__')} if isinstance(adj, dict) else adj)
+                         {str(k): v for k, v in adj.items() if not str(k).startswith('__')} if isinstance(adj, dict) else adj)
                 _shot = _screenshot_error(order_id, venture, 'no_updates')
                 _stat('error', order_id=order_id, venture=venture, brand=platform,
-                      error='Không có data để ghi lên gsheet',
-                      crop_path=_crop_path or _shot, ocr_lines=_ocr_lines)
+                    error='Không có data để ghi lên gsheet',
+                    crop_path=_crop_path or _shot, ocr_lines=_ocr_lines, parsed_mapping=parsed_mapping)
                 continue
 
             # ── Push to gsheet ────────────────────────────────────────────
