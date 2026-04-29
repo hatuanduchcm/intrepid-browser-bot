@@ -241,7 +241,7 @@ def _capture_adjustment_area(cx: int = None, cy: int = None, popup_mode: bool = 
 
         # ── Popup mode: capture above the ? icon ────────────────────────────
         if popup_mode and cx is not None and cy is not None:
-            pad_w = 500   # spread left/right from icon center
+            pad_w = 450   # spread left/right from icon center (reduced from 500)
             pad_h = 550   # height above icon (popup appears above)
             x1 = max(0, cx - pad_w // 2)
             w1 = min(pad_w, screen_w - x1)
