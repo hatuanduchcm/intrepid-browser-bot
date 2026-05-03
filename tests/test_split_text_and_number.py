@@ -1,6 +1,6 @@
+# No direct usage of clean_amount in this file, so no changes needed
 import pytest
-
-from order.events.handler_copy_adjustment import split_text_and_number
+from utils.split_text_and_number import split_text_and_number, try_ocr_currency_token
 
 
 def test_split_text_and_number_various():
@@ -16,6 +16,13 @@ def test_split_text_and_number_various():
         ("Voucher Sponsored by Seller d41.000", ("voucher sponsored by seller", "d41.000")),
         ("ce Subtotal Shipping Fee Charged by Logistic | 432.200", ("ce subtotal shipping fee charged by logistic", "432.200")),
         ("Transaction Fee d9 329", ("transaction fee", "d9329")),
+        ("Compensation as Parcel was Lost P3,/21.31", ("compensation as parcel was lost", "P3,721.31")),
+        ("Total Adjustment Amount -P'2,042.96", ("total adjustment amount", "-P2,042.96")),
+        ("Service Fee P11 22.00", ("service fee", "P1122.00")),
+        ("Service Fee d4 686", ("service fee", "d4686")),
+        ("Service Fee Bt", ("service fee", "b1")),
+        ("Total Adjustment Amount d118./12", ("total adjustment amount", "d118.712")),
+        ("Total Adjustment Amount g905 . 000", ("total adjustment amount", "g905.000")),
         
     ]
 
@@ -23,3 +30,28 @@ def test_split_text_and_number_various():
         label, num = split_text_and_number(line)
         assert label == exp_label
         assert num == exp_num
+
+
+def test_try_ocr_currency_token():
+    cases = [
+        ("Bt", "B1"),
+        ("dO", "d9"),
+        ("dS", "d5"),
+        ("-Bt", "-B1"),
+        ("₱O", "₱9"),
+        ("$O", "$9"),
+        ("d9.000", "d9.000"),
+        ("B8so", "B850"),
+        ("-₱-53.00", "-₱53.00"),
+        ("P°53.00", "P53.00"),
+        ("P'53.00", "P53.00"),
+        ("P‘53.00", "P53.00"),
+        ("P’53.00", "P53.00"),
+        ("P`53.00", "P53.00"),
+        ("P´53.00", "P53.00"),
+        ("#53.00", "P53.00"),
+        ("d118./12", "d118.712"),
+
+    ]
+    for inp, expected in cases:
+        assert try_ocr_currency_token(inp) == expected

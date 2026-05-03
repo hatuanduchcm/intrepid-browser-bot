@@ -53,6 +53,7 @@ class ColumnName(Enum):
     LOGISTICS_RELATED_ADJUSTMENT = 'LOGISTICS_RELATED_ADJUSTMENT'
     RETURN_REFUND_ADJUSTMENT = 'RETURN_REFUND_ADJUSTMENT'
     OTHERS = 'OTHERS'
+    PISHIP_PROGRAM_SAVINGS = 'PISHIP_PROGRAM_SAVINGS'
 
 
 # Simplified mappings requested: two separate maps
@@ -89,6 +90,7 @@ ADJUSTMENT_COLUMNS = {
     ColumnName.LOGISTICS_RELATED_ADJUSTMENT: ["Logistics Related Compensation", "Logistics Related Adjustment"],
     ColumnName.RETURN_REFUND_ADJUSTMENT: ["Return Refund Adjustment/Compensation", "Return Refund Adjustment", "Return/Refund Adjustment"],
     ColumnName.OTHERS: ["Others"],
+    ColumnName.PISHIP_PROGRAM_SAVINGS: ["PiShip Program Savings", "PiShip Program"],
 }
 
 # Map ColumnName -> GSheet header text
@@ -123,6 +125,7 @@ GSHEET_COLUMN = {
     ColumnName.LOGISTICS_RELATED_ADJUSTMENT: "Logistics Related Adjustment",
     ColumnName.RETURN_REFUND_ADJUSTMENT: "Return Refund Adjustment",
     ColumnName.OTHERS: "Others",
+    ColumnName.PISHIP_PROGRAM_SAVINGS: "PiShip Program Savings",
 }
 
 def find_columnname_by_shopee_label(label: str) -> Union[ColumnName, None]:

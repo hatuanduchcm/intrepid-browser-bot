@@ -119,9 +119,11 @@ def handle_open_order_event(event_payload):
                         return True
                     else:
                         logger.debug('No order ID box image found on screen after trying all candidates')
+                        # Stop processing further orders if not found
+                        raise RuntimeError('Order ID box not found, stopping further order processing.')
                 except Exception as e:
                     logger.debug('pyautogui fallback for clicking order ID box failed: %s', e)
-                    pass
+                    raise
             except Exception as e:
                 logger.debug('open_order navigation failed: %s', e)
         return False
@@ -147,33 +149,83 @@ def _navigate_to_order_portal(edits, venture: str = 'VN') -> bool:
     """Focus an Edit control and navigate to the order portal URL. Returns True on success."""
     try:
         from pywinauto.keyboard import send_keys
-        edits_sorted = sorted(edits, key=lambda e: e.rectangle().top)
+        import pyautogui
+        edits_sorted = sorted(edits, key=lambda e: e.rectangle().width, reverse=True)
         addr = edits_sorted[0]
         # focus address/control and try to set URL directly (preferred for non-standard browsers)
         addr.set_focus()
-        time.sleep(3)
+        time.sleep(1.2)
         url = _order_portal_url(venture)
         try:
             addr.set_text(url)
-            time.sleep(0.5)
+            time.sleep(0.3)
         except Exception:
-            # fallback: type into the focused control (previous approach that worked)
             send_keys('^a{BACKSPACE}')
-            time.sleep(0.5)
+            time.sleep(0.3)
             send_keys(url)
         send_keys('{ENTER}')
-        time.sleep(16.0)
+
+        # Wait for order input box (image) to appear, up to 15s
+        input_img = Path(__file__).resolve().parents[2] / 'assets' / 'icons' / 'order_input.png'
+        found_input = False
+        for _ in range(25):  # 25 x 0.5s = 12.5s max
+            if input_img.exists():
+                try:
+                    m = pyautogui.locateCenterOnScreen(str(input_img), confidence=0.8)
+                except Exception as e:
+                    logger.debug('Error locating order input image on screen: %s', e)
+                    m = None
+                if m:
+                    found_input = True
+                    break
+            else:
+                logger.debug('Order input image not found in assets/icons/')
+            time.sleep(0.5)
+
+        if not found_input:
+            logger.debug('Order input box not found after navigation')
+            return False
+
+        # Check for order-shipping.png and order-warning.png icons only
+        icons_dir = Path(__file__).resolve().parents[2] / 'assets' / 'icons'
+        shipping_icon = icons_dir / 'order-shipping.png'
+        warning_icon = icons_dir / 'order-warning.png'
+        found_shipping = False
+        found_warning = False
+        for _ in range(10):  # check for up to 5s
+            try:
+                if shipping_icon.exists():
+                    try:
+                        if pyautogui.locateOnScreen(str(shipping_icon), confidence=0.7):
+                            found_shipping = True
+                    except Exception as e:
+                        logger.debug('Error locating shipping_icon on screen: %s', e)
+                if warning_icon.exists():
+                    try:
+                        if pyautogui.locateOnScreen(str(warning_icon), confidence=0.7):
+                            found_warning = True
+                    except Exception as e:
+                        logger.debug('Error locating warning_icon on screen: %s', e)
+            except Exception as e:
+                logger.debug('Error in shipping/warning icon check loop: %s', e)
+            time.sleep(0.5)
+
+        if found_shipping or found_warning:
+            time.sleep(2.0)
+        else:
+            time.sleep(3.5)
+
         return True
     except Exception as e:
         logger.debug('navigate_to_order_portal error: %s', e)
         return False
 
 
-def _dismiss_popups(max_attempts: int = 2, icon_name: str = 'close-popup.png', confidence: float = 0.85, click_delay: float = 0.25, pause_between: float = 1):
+def _dismiss_popups(max_attempts: int = 2, confidence: float = 0.85, click_delay: float = 0.25, pause_between: float = 1):
     """Try to find and click popup close buttons repeatedly until none remain or max attempts reached.
 
-    Looks for `assets/icons/<icon_name>` on screen and clicks center when found. Waits `pause_between`
-    seconds between attempts to let UI stabilize. Best-effort; does not raise on failures.
+    Looks for both close-popup.png and close-popup-2.png in assets/icons/ and clicks center when found.
+    Waits `pause_between` seconds between attempts to let UI stabilize. Best-effort; does not raise on failures.
     """
     try:
         import pyautogui
@@ -181,20 +233,26 @@ def _dismiss_popups(max_attempts: int = 2, icon_name: str = 'close-popup.png', c
         logger.debug('pyautogui not available for dismissing popups')
         return
 
-    icon_path = Path(__file__).resolve().parents[2] / 'assets' / 'icons' / icon_name
-    if not icon_path.exists():
-        logger.debug('Popup close icon not found: %s', icon_path)
+    icons_dir = Path(__file__).resolve().parents[2] / 'assets' / 'icons'
+    icon_paths = [
+        icons_dir / 'close-popup.png',
+        icons_dir / 'close-popup-2.png',
+    ]
+    icon_paths = [p for p in icon_paths if p.exists()]
+    if not icon_paths:
+        logger.debug('No popup close icons found in assets/icons/')
         return
 
     attempts = 0
     while attempts < max_attempts:
         attempts += 1
-        try:
-            matches = list(pyautogui.locateAllOnScreen(str(icon_path), confidence=confidence))
-        except Exception as e:
-            logger.debug('locateAllOnScreen error while dismissing popups: %s', e)
-            matches = []
-
+        matches = []
+        for icon_path in icon_paths:
+            try:
+                found = list(pyautogui.locateAllOnScreen(str(icon_path), confidence=confidence))
+                matches.extend(found)
+            except Exception as e:
+                logger.debug('locateAllOnScreen error while dismissing popups: %s', e)
         if not matches:
             # nothing found, stop early
             return

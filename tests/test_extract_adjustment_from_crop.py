@@ -5,13 +5,20 @@ from pathlib import Path
 from order.events.handler_copy_adjustment import extract_adjustment_mapping_from_crop
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_DEBUG_DIR = _REPO_ROOT / 'assets' / 'debug_matches'
+_DEBUG_DIR = _REPO_ROOT / 'assets' / 'test'
 
 _SAMPLES = [
-    ('proc_vn.png', 'VN'),
-    ('proc_id.png', 'ID'),
-    ('proc_my.png', 'MY'),
-    ('proc_th.png', 'TH'),
+    # ('test_vn.png', 'VN'),
+    # ('test_vn1.png', 'VN'),
+    # ('test_vn2.png', 'VN'),
+    ('test_vn3.png', 'VN'),
+    # ('test_id.png', 'ID'),
+    # ('test_my.png', 'MY'),
+    # ('test_th.png', 'TH'),
+    # ('test_ph.png', 'PH'),
+    # ('test_ph2.png', 'PH'),
+    # ('test_ph3.png', 'PH'),
+    # ('test_ph4.png', 'PH'),
 ]
 
 
@@ -31,3 +38,4 @@ def test_extract_adjustment_mapping_from_crop_on_sample(filename, venture):
     assert '__total_check__' in result, f"{filename}: missing '__total_check__'"
     tc = result['__total_check__']
     assert isinstance(tc, dict) and 'matches' in tc, f"{filename}: __total_check__ missing 'matches'"
+    assert tc['matches'] is True, f"{filename}: total_check matches=False (expected matches=True).\nDetails: {tc}"

@@ -403,6 +403,10 @@ class BotApp(tk.Tk):
         self.resizable(True, True)
         self.minsize(640, 520)
 
+        # Venture checkboxes
+        self._venture_codes = ["VN", "MY", "ID", "SG", "PH", "TH"]
+        self._venture_vars = {code: tk.BooleanVar(value=True) for code in self._venture_codes}
+
         # Set icon — iconbitmap only (wm_iconphoto causes blurry rendering)
         _ico = _PROJECT_ROOT / 'assets' / 'app_icon.ico'
         _ico_meipass = _BASE_DIR / 'assets' / 'app_icon.ico'
@@ -828,6 +832,16 @@ class BotApp(tk.Tk):
 
         settings.columnconfigure(1, weight=1)
 
+
+        # ── Venture checkboxes ───────────────────────────────────────────────
+        venture_frame = self._reg(tk.Frame(self, bg=t["bg"]), "bg")
+        venture_frame.pack(fill=tk.X, padx=16, pady=(8, 0))
+        tk.Label(venture_frame, text="Venture:", bg=t["bg"], fg=t["fg"], font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT, padx=(0, 8))
+        for code in self._venture_codes:
+            cb = tk.Checkbutton(venture_frame, text=code, variable=self._venture_vars[code],
+                               bg=t["bg"], fg=t["fg"], selectcolor=t["bg2"], font=("Segoe UI", 10))
+            cb.pack(side=tk.LEFT, padx=2)
+
         # ── Control buttons ───────────────────────────────────────────────────
         btn_frame = self._reg(tk.Frame(self, bg=t["bg"]), "bg")
         btn_frame.pack(fill=tk.X, padx=16, pady=8)
@@ -1137,7 +1151,9 @@ class BotApp(tk.Tk):
             tk.Label(row, text=self._(label_key), bg=t["bg2"], fg=t["fg2"], font=("Segoe UI", 9)).pack(side=tk.LEFT)
             if copyable:
                 _var = tk.StringVar(value=value)
-                _ent = tk.Entry(row, textvariable=_var, bg=t["bg2"], fg=t["fg"], font=("Segoe UI", 9, "bold" if bold else "normal"), relief=tk.FLAT, bd=0, state="readonly", readonlybackground=t["bg2"], width=len(value) + 2)
+                # Tăng width cho order id
+                width = max(18, len(value) + 2) if label_key == "stat_label_order" else len(value) + 2
+                _ent = tk.Entry(row, textvariable=_var, bg=t["bg2"], fg=t["fg"], font=("Segoe UI", 9, "bold" if bold else "normal"), relief=tk.FLAT, bd=0, state="readonly", readonlybackground=t["bg2"], width=width)
                 _ent.pack(side=tk.LEFT, padx=(4, 0))
             else:
                 tk.Label(row, text=value, bg=t["bg2"], fg=t["fg"], font=("Segoe UI", 9, "bold" if bold else "normal"), wraplength=480, justify=tk.LEFT).pack(side=tk.LEFT, padx=(4, 0))
@@ -1154,20 +1170,28 @@ class BotApp(tk.Tk):
             main_frame.columnconfigure(i, weight=1, uniform="col")
         main_frame.rowconfigure(0, weight=1)
 
-        # (1) Parsed mapping (left)
+        # (1) Parsed mapping (left, show real column name, copyable, more spacing)
+        from gsheets.order_adjustment_sheet import GSHEET_COLUMN
         mapping_frame = tk.Frame(main_frame, bg=t["bg"])
         mapping_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=0)
         tk.Label(mapping_frame, text=self._("stat_label_parsed_mapping") or "Parsed Mapping", bg=t["bg"], fg=t["fg2"], font=("Segoe UI", 9, "bold")).pack(anchor=tk.W, pady=(0, 4))
         if parsed_mapping:
             for k, v in parsed_mapping.items():
                 row = tk.Frame(mapping_frame, bg=t["bg"])
-                row.pack(fill=tk.X, padx=0, pady=1)
-                tk.Label(row, text=str(k), bg=t["bg"], fg=t["fg2"], font=("Consolas", 9, "bold"), width=28, anchor=tk.W).pack(side=tk.LEFT)
-                tk.Label(row, text=str(v), bg=t["bg"], fg=t["fg"], font=("Consolas", 9), anchor=tk.W).pack(side=tk.LEFT, padx=(8, 0))
+                row.pack(fill=tk.X, padx=0, pady=4)  # tăng giãn dòng
+                # Lấy tên thật từ GSHEET_COLUMN, fallback sang str(k)
+                col_name = GSHEET_COLUMN.get(k, str(k))
+                # Copyable entry cho tên cột và value
+                col_var = tk.StringVar(value=col_name)
+                val_var = tk.StringVar(value=str(v))
+                col_ent = tk.Entry(row, textvariable=col_var, bg=t["bg"], fg=t["fg2"], font=("Segoe UI", 9, "bold"), relief=tk.FLAT, bd=0, state="readonly", readonlybackground=t["bg"], width=max(18, len(col_name)+2))
+                col_ent.pack(side=tk.LEFT, padx=(0, 4))
+                val_ent = tk.Entry(row, textvariable=val_var, bg=t["bg"], fg=t["fg"], font=("Consolas", 9), relief=tk.FLAT, bd=0, state="readonly", readonlybackground=t["bg"], width=max(10, len(str(v))+2))
+                val_ent.pack(side=tk.LEFT, padx=(0, 0))
 
-        # (2) Image (center, always centered)
+        # (2) Image (center, always centered, margin top)
         img_frame = tk.Frame(main_frame, bg=t["bg"])
-        img_frame.grid(row=0, column=1, sticky="nsew", padx=0, pady=0)
+        img_frame.grid(row=0, column=1, sticky="nsew", padx=0, pady=(24,0))
         img_frame.grid_propagate(True)
         img_frame.rowconfigure(0, weight=1)
         img_frame.columnconfigure(0, weight=1)
@@ -1312,6 +1336,10 @@ class BotApp(tk.Tk):
         self._set_status("status_running")
         self._progress.start(12)
         self._reset_stats()
+
+        # Lấy danh sách venture được chọn
+        selected_ventures = [v for v, var in self._venture_vars.items() if var.get()]
+        os.environ["SELECTED_VENTURES"] = ",".join(selected_ventures)
 
         # Drain stale messages from previous run
         try:

@@ -59,21 +59,30 @@ def handle_copy_adjustment_event(event_payload):
     venture = (event_payload.get('venture') or '').strip().upper()
     order_id = (event_payload.get('order_id') or event_payload.get('order') or '').strip()
 
-    # try to get tooltip data using layered strategies
-    try:
-        # hover/click question icon or capture adjustment area if icon absent
-        crop_path = _hover_and_capture_tooltip(w, venture=venture, order_id=order_id)
-        crop_path = crop_path if isinstance(crop_path, str) else None
+    # try to get tooltip data using layered strategies, retry up to 3 times
+    last_exception = None
+    for attempt in range(3):
+        logger.debug(f'handle_copy_adjustment_event: attempt={attempt}')
+        try:
+            crop_path = _hover_and_capture_tooltip(w, venture=venture, order_id=order_id)
+            crop_path = crop_path if isinstance(crop_path, str) else None
 
-        # OCR / parse pipeline handles all label types via ADJUSTMENT_COLUMNS
-        text = get_tooltip_data(_path=crop_path, venture=venture)
-        if text:
-            return text
-    except Exception as e:
-        logger.debug('copy_adjustment_failed: %s', e)
+            # OCR / parse pipeline handles all label types via ADJUSTMENT_COLUMNS
+            text = get_tooltip_data(_path=crop_path, venture=venture)
+            logger.debug(f'handle_copy_adjustment_event: attempt={attempt}, text={bool(text)}')
+            if text:
+                if attempt > 0:
+                    logger.info(f"Adjustment found after {attempt+1} attempts")
+                return text
+        except Exception as e:
+            last_exception = e
+            logger.debug(f'copy_adjustment_failed (attempt {attempt+1}): %s', e)
+        time.sleep(0.6 + 0.2 * attempt)  # Slightly longer wait each retry
 
-    raise RuntimeError('Adjustment details not found')
+    raise RuntimeError(f'Adjustment details not found after 3 attempts: {last_exception}')
 
+from utils.split_text_and_number import split_text_and_number
+from utils.amounts import add_negative_candidates
 
 def _hover_and_capture_tooltip(window, venture: str = '', order_id: str = ''):
     """Locate the question icon visually, hover/click it and capture screenshots.
@@ -563,13 +572,13 @@ def extract_adjustment_mapping_from_crop(_path, venture: str = ''):
 
         # validate totals; return parsed only when matched
         try:
-            check = validate_total_adjustment(parsed)
+            check = validate_total_adjustment_with_negatives(parsed)
             if isinstance(parsed, dict):
                 parsed['__total_check__'] = check
             if isinstance(check, dict) and check.get('matches'):
                 return parsed
         except Exception:
-            logger.debug('validate_total_adjustment raised for parsed mapping', exc_info=True)
+            logger.debug('validate_total_adjustment_with_negatives raised for parsed mapping', exc_info=True)
 
         # no match: save as best-effort fallback, signal caller to try next variant
         if _best_effort[0] is None:
@@ -645,127 +654,62 @@ def parse_lines_to_map(text: str, venture: str = ''):
                     best_cname = cname
                     best_len = len(lab)
         if best_cname is not None:
-            # Always keep decimal string for PH (with dot), not integer
-            cleaned = clean_amount(numeric, venture=venture)
-            if venture.upper() == 'PH' and cleaned is not None:
-                mapping[best_cname] = cleaned  # e.g. -4642.17
-            else:
-                mapping[best_cname] = cleaned
+            # Get all plausible candidates for this amount
+            cleaned_candidates = clean_amount(numeric, venture=venture)
+            mapping[best_cname] = cleaned_candidates
 
     return mapping
 
 
-# OCR letter → digit substitution table (for cases like "Bt" = "฿1")
-_OCR_LETTER_TO_DIGIT = str.maketrans({
-    't': '1', 'T': '1',
-    'l': '1', 'I': '1',
-    'O': '0', 'o': '0',
-    'S': '5', 's': '5',
-    'Z': '2', 'z': '2',
-    'G': '6', 'g': '9',
-    'B': '8',
-})
-
-# Currency prefixes that OCR often renders as a single letter
-_CURRENCY_LETTER_PREFIXES = _re.compile(r'^[-+]?\s*[฿₱B$€£¥₫đdPRr]\s*', _re.IGNORECASE)
-
-# OCR misread normalization: (pattern, replacement) applied before number extraction.
-# Handles Philippine Peso ₱ being read as 'P°', '#', etc.
-_OCR_CURRENCY_NORMALIZE = [
-    (_re.compile(r'P°', _re.IGNORECASE), '₱'),                   # P° → ₱
-    (_re.compile(r"P['\u2018\u2019\u02bc\u0060\u00b4]"), '₱'),   # P' P' P` P´ → ₱
-    (_re.compile(r'(?<![\w])#(?=\d)'), '₱'),                     # # before digit → ₱
-    (_re.compile(r'(?<!\w)P(?=[-\d])'), '₱'),                    # bare P before digit/minus → ₱ (e.g. P35.00, P-57.00)
-    (_re.compile(r'[-+]?₱-(?=\d)'), lambda m: '-₱'),             # collapse double-sign: -₱- or ₱- → -₱
-    # Bold-text OCR: '/' misread as '7' immediately after currency prefix
-    # e.g. "Rp/7.000" → "Rp77.000", "Rp/77.000" → "Rp777.000"
-    (_re.compile(r'(Rp|RM|R\$)\s*/\s*(?=\d)', _re.IGNORECASE), lambda m: m.group(1) + '7'),
-]
 
 
-def _try_ocr_currency_token(token: str):
-    """If `token` looks like a currency letter + OCR-confused digits (e.g. 'Bt'),
-    return the corrected numeric string (e.g. 'B1'), else return None.
+# def split_text_and_number_2(line: str):
+#     if not line:
+#         return "", ""
 
-    Preserves the leading currency letter so clean_amount can strip it.
-    """
-    sign = ''
-    t = token.strip()
-    if t.startswith('-'):
-        sign = '-'
-        t = t[1:].lstrip()
-    # Must start with a known currency-like letter
-    m = _CURRENCY_LETTER_PREFIXES.match(t)
-    if not m:
-        return None
-    currency_part = m.group(0)
-    rest = t[m.end():]
-    if not rest:
-        return None
-    # Heuristic: if rest has NO real digit, letters like O/o are misreads of 9 (not 0).
-    # Rationale: OCR correctly outputs the digit '0' when it sees a zero; the LETTER 'O'
-    # in numeric position means OCR confused the shape of '9' with 'O'.
-    # When real digits exist alongside letters (e.g. '8so'), O→0 is still correct.
-    if not _re.search(r'\d', rest):
-        _token_map = str.maketrans({'O': '9', 'o': '9', 'S': '5', 's': '5',
-                                    't': '1', 'T': '1', 'l': '1', 'I': '1',
-                                    'Z': '2', 'z': '2', 'G': '6', 'g': '9', 'B': '8'})
-    else:
-        _token_map = _OCR_LETTER_TO_DIGIT
-    corrected = rest.translate(_token_map)
-    # Accept only if result is all digits (optionally with separators)
-    if _re.fullmatch(r'[\d\.,]+', corrected):
-        return sign + currency_part + corrected
-    return None
+#     # Normalize OCR-confused currency symbols before any parsing
+#     for _norm_pat, _norm_rep in _OCR_CURRENCY_NORMALIZE:
+#         line = _norm_pat.sub(_norm_rep, line)
 
+#     # Remove special | character that may interfere with OCR parsing, replacing it with a space to preserve word boundaries
+#     line = line.replace('|', '')
 
-def split_text_and_number(line: str):
-    if not line:
-        return "", ""
+#     num_pattern = r"(?:(?<=^)|(?<=\s))[-+]?\s*(?:Rp|RM|S\$|[^\w\s\|]|\w)?\s*\d[\d\.,\s oOsS]*"
+#     nums = _re.findall(num_pattern, line)
+#     num = _re.sub(r"\s+", "", nums[-1]).strip() if nums else ''
 
-    # Normalize OCR-confused currency symbols before any parsing
-    for _norm_pat, _norm_rep in _OCR_CURRENCY_NORMALIZE:
-        line = _norm_pat.sub(_norm_rep, line)
+#     if num:
+#         _pfx_m = _re.match(r'^([-+]?\s*(?:Rp|RM|S\$|B|[^\w\s])?\s*)', num)
+#         _pfx = _pfx_m.group(0) if _pfx_m else ''
+#         _body = num[len(_pfx):]
+#         _body = _re.sub(r'(\d)[sS]([oO])', r'\1\2', _body)
+#         if not _re.search(r'\d', _body):
+#             _body = _body.translate(str.maketrans({'o': '9', 'O': '9', 's': '5', 'S': '5'}))
+#         else:
+#             _body = _body.translate(str.maketrans({'o': '0', 'O': '0', 's': '5', 'S': '5'}))
+#         _body = _re.sub(r'[^\d.,\-]', '', _body)
+#         if _body:
+#             num = _pfx.strip() + _body
 
-    # Remove special | character that may interfere with OCR parsing, replacing it with a space to preserve word boundaries
-    line = line.replace('|', '')
+#     # Fallback: if still no num, try to extract trailing number (e.g. 'FP86.00' -> '86.00')
+#     if not num:
+#         m = _re.search(r'([-+]?\d+[\d.,]*\d)', line)
+#         if m:
+#             num = m.group(1)
 
-    num_pattern = r"(?:(?<=^)|(?<=\s))[-+]?\s*(?:Rp|RM|S\$|[^\w\s\|]|\w)?\s*\d[\d\.,\s oOsS]*"
-    nums = _re.findall(num_pattern, line)
-    num = _re.sub(r"\s+", "", nums[-1]).strip() if nums else ''
+#     # Fallback: primary regex missed because OCR confused digits with letters (e.g. "Bt" = "฿1").
+#     if not num:
+#         for word in _re.split(r'\s+', line.strip()):
+#             corrected = _try_ocr_currency_token(word)
+#             if corrected:
+#                 num = corrected
+#                 text_only = line.replace(word, ' ')
+#                 break
+#     else:
+#         text_only = _re.sub(num_pattern, " ", line)
 
-    if num:
-        _pfx_m = _re.match(r'^([-+]?\s*(?:Rp|RM|S\$|B|[^\w\s])?\s*)', num)
-        _pfx = _pfx_m.group(0) if _pfx_m else ''
-        _body = num[len(_pfx):]
-        _body = _re.sub(r'(\d)[sS]([oO])', r'\1\2', _body)
-        if not _re.search(r'\d', _body):
-            _body = _body.translate(str.maketrans({'o': '9', 'O': '9', 's': '5', 'S': '5'}))
-        else:
-            _body = _body.translate(str.maketrans({'o': '0', 'O': '0', 's': '5', 'S': '5'}))
-        _body = _re.sub(r'[^\d.,\-]', '', _body)
-        if _body:
-            num = _pfx.strip() + _body
-
-    # Fallback: if still no num, try to extract trailing number (e.g. 'FP86.00' -> '86.00')
-    if not num:
-        m = _re.search(r'([-+]?\d+[\d.,]*\d)', line)
-        if m:
-            num = m.group(1)
-
-    # Fallback: primary regex missed because OCR confused digits with letters (e.g. "Bt" = "฿1").
-    if not num:
-        for word in _re.split(r'\s+', line.strip()):
-            corrected = _try_ocr_currency_token(word)
-            if corrected:
-                num = corrected
-                text_only = line.replace(word, ' ')
-                break
-    else:
-        text_only = _re.sub(num_pattern, " ", line)
-
-    text_only = text_only.strip().lower() if 'text_only' in locals() else line.strip().lower()
-    return text_only, num
+#     text_only = text_only.strip().lower() if 'text_only' in locals() else line.strip().lower()
+#     return text_only, num
 
 def validate_total_adjustment(parsed: dict):
     """Return comparison using TOTAL_ADJUSTMENT_AMOUNT directly (no recompute sum)."""
@@ -819,9 +763,13 @@ def validate_total_adjustment(parsed: dict):
     # Try to get venture from parsed if available, else default to None
     venture = parsed.get('__venture__', None)
 
+    # Step 1: Get total value (always use the first candidate if it's a list)
     total_val = None
-    if total_key in parsed:
-        total_val = to_num(parsed.get(total_key), venture)
+    total_val_raw = parsed.get(total_key)
+    if isinstance(total_val_raw, list):
+        total_val = to_num(total_val_raw[0], venture)
+    elif total_key in parsed:
+        total_val = to_num(total_val_raw, venture)
     else:
         try:
             from gsheets.order_adjustment_sheet import GSHEET_COLUMN
@@ -834,20 +782,14 @@ def validate_total_adjustment(parsed: dict):
             total_val = to_num(parsed.get(header), venture)
         else:
             total_val = to_num(parsed.get(total_key, '0'), venture)
-    s = Decimal(0)
-    # also build per-key converted map for logging
-    converted_map = {}
-    for k, v in parsed.items():
-        try:
-            nv = to_num(v, venture)
-        except Exception:
-            nv = Decimal(0)
-        key_str = str(k)
-        # skip internal/debug keys (like __ocr_lines__, __total_check__) from logging and summing
-        if not key_str.startswith('__'):
-            converted_map[key_str] = to_int_cents(nv, venture)
 
-        # skip the authoritative total key and any debug keys when summing
+    # Step 2: Build candidate lists for each key (excluding total and debug keys)
+    from itertools import product
+    candidate_keys = []
+    candidate_lists = []
+    for k, v in parsed.items():
+        key_str = str(k)
+        # skip internal/debug keys and total key
         try:
             is_total_key = (
                 k == total_key
@@ -856,23 +798,71 @@ def validate_total_adjustment(parsed: dict):
             )
         except Exception:
             is_total_key = False
-
         if is_total_key or key_str.startswith('__'):
             continue
+        # v is a list of candidates or a string
+        if isinstance(v, list):
+            candidate_lists.append(v)
+        else:
+            candidate_lists.append([v])
+        candidate_keys.append(k)
 
+    # Step 3: Try all combinations
+    found = False
+    best_combo = None
+    for combo in product(*candidate_lists):
+        s = Decimal(0)
+        converted_map = {}
+        for idx, val in enumerate(combo):
+            try:
+                nv = to_num(val, venture)
+            except Exception:
+                nv = Decimal(0)
+            k = candidate_keys[idx]
+            converted_map[str(k)] = to_int_cents(nv, venture)
+            s += nv
+        # For PH, sum and total should be compared as integer centavos
+        try:
+            sum_others_int = to_int_cents(s, venture)
+            total_val_int = to_int_cents(total_val, venture)
+        except Exception:
+            sum_others_int = int(s)
+            total_val_int = int(total_val)
+        matches = (total_val_int == sum_others_int)
+        if matches:
+            found = True
+            best_combo = combo
+            break
+
+    # Step 4: If found, update parsed with the chosen values
+    if found and best_combo is not None:
+        for idx, k in enumerate(candidate_keys):
+            parsed[k] = best_combo[idx]
+        # also build per-key converted map for logging
+        converted_map = {str(k): to_int_cents(to_num(v, venture), venture) for k, v in zip(candidate_keys, best_combo)}
+        sum_others_int = to_int_cents(sum([to_num(v, venture) for v in best_combo]), venture)
+        total_val_int = to_int_cents(total_val, venture)
+        return {'expected_sum': int(total_val_int), 'total_value': int(sum_others_int), 'matches': True}
+
+    # If not found, log as before (using first candidate for each key)
+    s = Decimal(0)
+    converted_map = {}
+    for idx, k in enumerate(candidate_keys):
+        v = candidate_lists[idx][0]
+        try:
+            nv = to_num(v, venture)
+        except Exception:
+            nv = Decimal(0)
+        converted_map[str(k)] = to_int_cents(nv, venture)
         s += nv
-    # For PH, sum and total should be compared as integer centavos
     try:
         sum_others_int = to_int_cents(s, venture)
         total_val_int = to_int_cents(total_val, venture)
     except Exception:
         sum_others_int = int(s)
         total_val_int = int(total_val)
-
     matches = (total_val_int == sum_others_int)
-
     if not matches:
-        # persist mismatch record (append JSON lines)
         try:
             record = {
                 'ts': int(time.time()),
@@ -884,10 +874,27 @@ def validate_total_adjustment(parsed: dict):
             }
             out_p = DEBUG_DIR / 'adjustment_validation_errors.jsonl'
             with out_p.open('a', encoding='utf-8') as f:
-                # write a human-readable JSON block per record and separate records with ---
                 f.write(json.dumps(record, ensure_ascii=False, indent=2) + "\n")
                 f.write("---\n")
         except Exception:
             logger.exception('Failed to write adjustment validation error')
-
     return {'expected_sum': int(total_val_int), 'total_value': int(sum_others_int), 'matches': matches}
+
+def validate_total_adjustment_with_negatives(parsed: dict):
+    """
+    Gọi validate_total_adjustment. Nếu không matches, thử sinh thêm số âm cho từng candidate list rồi validate lại.
+    Trả về dict kết quả validate (có thể đã matches sau khi thêm số âm).
+    """
+    check = validate_total_adjustment(parsed)
+    if isinstance(check, dict) and not check.get('matches'):
+        changed = False
+        for k, v in parsed.items():
+            if isinstance(v, list):
+                new_v = add_negative_candidates(v)
+                if len(new_v) > len(v):
+                    parsed[k] = new_v
+                    changed = True
+        if changed:
+            check2 = validate_total_adjustment(parsed)
+            return check2
+    return check

@@ -69,7 +69,7 @@ def find_and_click_brand_tab(brand_name: str, confidences: tuple = (0.9, 0.85, 0
     return False
 
 
-def wait_for_shop_url(venture: str = '', timeout: float = 15.0, stable_for: float = 2.0) -> bool:
+def wait_for_shop_url(venture: str = '', timeout: float = 15.0, stable_for: float = 3.5) -> bool:
     """Wait until the Intrepid address bar shows a Shopee shop URL and stays stable.
 
     Matches patterns like:

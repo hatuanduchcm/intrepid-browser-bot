@@ -1,7 +1,7 @@
 import pytest
 
 from gsheets.order_adjustment_sheet import ColumnName
-from order.events.handler_copy_adjustment import validate_total_adjustment
+from order.events.handler_copy_adjustment import validate_total_adjustment, validate_total_adjustment_with_negatives
 
 
 def test_validate_total_adjustment_match_enum_key():
@@ -11,7 +11,7 @@ def test_validate_total_adjustment_match_enum_key():
         ColumnName.TRANSACTION_FEE: '23.000',
     }
 
-    result = validate_total_adjustment(parsed)
+    result = validate_total_adjustment_with_negatives(parsed)
 
     assert result is not None
     assert result['matches'] is True
@@ -26,7 +26,7 @@ def test_validate_total_adjustment_mismatch_enum_key():
         ColumnName.TRANSACTION_FEE: '23.000',
     }
 
-    result = validate_total_adjustment(parsed)
+    result = validate_total_adjustment_with_negatives(parsed)
 
     assert result is not None
     assert result['matches'] is False
@@ -40,7 +40,7 @@ def test_validate_total_adjustment_missing_key_returns_none():
         ColumnName.TRANSACTION_FEE: '5.000',
     }
 
-    assert validate_total_adjustment(parsed) is None
+    assert validate_total_adjustment_with_negatives(parsed) is None
 
 
 def test_validate_total_adjustment_string_key_returns_none():
@@ -50,4 +50,4 @@ def test_validate_total_adjustment_string_key_returns_none():
         ColumnName.SERVICE_FEE: '5.000',
     }
 
-    assert validate_total_adjustment(parsed) is None
+    assert validate_total_adjustment_with_negatives(parsed) is None

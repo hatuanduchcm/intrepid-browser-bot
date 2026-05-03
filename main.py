@@ -69,6 +69,10 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
     logger.info('Found %d orders to process', len(mapping))
 
     # 2) iterate — sort by venture first, then platform to group logins together
+    import os
+    selected_ventures = os.getenv('SELECTED_VENTURES')
+    selected_ventures_set = set(v.strip().upper() for v in selected_ventures.split(',')) if selected_ventures else None
+
     last_venture = None
     login_failed_ventures: set = set()   # ventures where login failed — skip all orders for these
     items = list(mapping.items())
@@ -79,6 +83,12 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
         return (str(v).strip().upper(), str(b).strip().lower())
     items.sort(key=_sort_key)
     for order_id, meta in items:
+        venture = (meta.get('Venture') or meta.get('venture') or '').strip().upper()
+        # Lọc theo danh sách venture được chọn
+        if selected_ventures_set is not None and venture not in selected_ventures_set:
+            logger.info('[%s] SKIP — Venture %s không nằm trong danh sách được chọn', order_id, venture)
+            _stat('skip', order_id=order_id, venture=venture)
+            continue
         venture = ''  # ensure defined in except block
         platform = ''  # ensure defined in except block
         try:
@@ -126,23 +136,26 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
 
             # ── Platform search ──────────────────────────────────────────────
             platform = meta.get('Platform')
-            if platform:
-                try:
-                    logger.info('[%s] Searching platform: %s', order_id, platform)
-                    found = handle_search_brand_event({'brand': platform})
-                    if not found:
-                        logger.error('[%s] ERROR — Platform not found: %s', order_id, platform)
-                        _stat('error', order_id=order_id, venture=venture, brand=platform,
-                              error=f'Platform không tìm thấy: {platform}',
-                              crop_path=_screenshot_error(order_id, venture, 'platform_not_found'))
-                        continue
-                    logger.info('[%s] Platform found: %s', order_id, platform)
-                except Exception as e:
-                    logger.error('[%s] ERROR — Platform search exception: %s', order_id, e)
+            if not platform or not str(platform).strip():
+                logger.info('[%s] SKIP — Platform empty', order_id)
+                _stat('skip', order_id=order_id, venture=venture, brand=platform)
+                continue
+            try:
+                logger.info('[%s] Searching platform: %s', order_id, platform)
+                found = handle_search_brand_event({'brand': platform})
+                if not found:
+                    logger.error('[%s] ERROR — Platform not found: %s', order_id, platform)
                     _stat('error', order_id=order_id, venture=venture, brand=platform,
-                          error=f'Platform search lỗi: {e}',
-                          crop_path=_screenshot_error(order_id, venture, 'platform_search_exc'))
+                          error=f'Platform không tìm thấy: {platform}',
+                          crop_path=_screenshot_error(order_id, venture, 'platform_not_found'))
                     continue
+                logger.info('[%s] Platform found: %s', order_id, platform)
+            except Exception as e:
+                logger.error('[%s] ERROR — Platform search exception: %s', order_id, e)
+                _stat('error', order_id=order_id, venture=venture, brand=platform,
+                      error=f'Platform search lỗi: {e}',
+                      crop_path=_screenshot_error(order_id, venture, 'platform_search_exc'))
+                continue
 
             # ── Order flow ────────────────────────────────────────────────
             logger.info('[%s] Opening order page …', order_id)
@@ -170,7 +183,7 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
             # Extract parsed mapping for debug (exclude __ keys)
             parsed_mapping = None
             if isinstance(adj, dict):
-                parsed_mapping = {str(k): v for k, v in adj.items() if not str(k).startswith('__')}
+                parsed_mapping = {k: v for k, v in adj.items() if not str(k).startswith('__')}
             # Use the crop path embedded in the adj dict (per-order, set during OCR)
             # Fall back to latest debug image only if not available
             _crop_path = (adj.get('__crop_path__') if isinstance(adj, dict) else None) or _latest_debug_image(order_id)

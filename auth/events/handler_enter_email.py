@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 _ICONS = Path(__file__).resolve().parents[2] / 'assets' / 'icons'
 _EMAIL_BOX_IMG = _ICONS / 'sign-in-email-box.png'
 _RELOAD_IMG = _ICONS / 'reload-app-icon.png'
+_RELOAD_IMG2 = _ICONS / 'reload-app-icon2.png'
 
 _MAX_FIND_ATTEMPTS = 5
 _FIND_DELAY = 1.0
@@ -32,19 +33,25 @@ def _locate_email_box():
 
 
 def _try_reload_app():
-    """Click reload-app-icon if found. Returns True if clicked."""
-    if not _RELOAD_IMG.exists():
-        logger.debug('reload-app-icon.png not found at %s', _RELOAD_IMG)
+    """Click reload-app-icon or reload-app-icon2 if found. Returns True if clicked."""
+    img_paths = []
+    if _RELOAD_IMG.exists():
+        img_paths.append(_RELOAD_IMG)
+    if _RELOAD_IMG2.exists():
+        img_paths.append(_RELOAD_IMG2)
+    if not img_paths:
+        logger.debug('No reload-app-icon found at %s or %s', _RELOAD_IMG, _RELOAD_IMG2)
         return False
-    try:
-        loc = pyautogui.locateCenterOnScreen(str(_RELOAD_IMG), confidence=0.8)
-        if loc:
-            pyautogui.click(loc.x, loc.y)
-            logger.info('Clicked reload-app-icon, waiting for app to reload')
-            time.sleep(3.0)
-            return True
-    except Exception as e:
-        logger.debug('reload icon locate/click failed: %s', e)
+    for img_path in img_paths:
+        try:
+            loc = pyautogui.locateCenterOnScreen(str(img_path), confidence=0.8)
+            if loc:
+                pyautogui.click(loc.x, loc.y)
+                logger.info('Clicked %s, waiting for app to reload', img_path.name)
+                time.sleep(3.0)
+                return True
+        except Exception as e:
+            logger.debug('reload icon locate/click failed for %s: %s', img_path, e)
     return False
 
 
