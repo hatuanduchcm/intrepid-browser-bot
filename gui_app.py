@@ -45,7 +45,7 @@ if not _VERSION_FILE.exists():
     _VERSION_FILE = _PROJECT_ROOT / 'version.txt'
 APP_VERSION = _VERSION_FILE.read_text(encoding='utf-8').strip() if _VERSION_FILE.exists() else '0.0.0'
 
-GITHUB_REPO = 'hatuanduc/intrepid-browser-bot-dist'
+GITHUB_REPO = 'hatuanduchcm/intrepid-browser-bot-dist'
 GITHUB_API_LATEST = f'https://api.github.com/repos/{GITHUB_REPO}/releases/latest'
 
 # ── Locale loader ─────────────────────────────────────────────────────────────

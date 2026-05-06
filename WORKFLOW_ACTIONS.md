@@ -50,7 +50,7 @@ GUI khởi động (gui_app.py)
 - **VI / EN language** — lưu vào `.env` (`GUI_LANG`), locale files tại `locales/`
 - **Status indicator** — đèn nhấp nháy khi running, tĩnh khi idle/done/stopped
 - **Log area** — màu theo level (ERROR/WARNING/INFO/DEBUG)
-- **Auto-update** — check `hatuanduc/intrepid-browser-bot-dist` khi khởi động
+- **Auto-update** — check `hatuanduchcm/intrepid-browser-bot-dist` khi khởi động
 
 ---
 
@@ -64,7 +64,7 @@ Developer:
        - Build EXE (Windows runner, Python 3.11)
        - Bundle Tesseract-OCR 5.5
        - Nén → InvoiceAdjustmentBot.zip
-       - Publish release lên hatuanduc/intrepid-browser-bot-dist
+       - Publish release lên hatuanduchcm/intrepid-browser-bot-dist
 
 User (máy khác):
   - Mở app → check API → thấy version mới

@@ -1,6 +1,9 @@
 """
 Converts app_icon_design.png to app_icon.ico with multiple embedded sizes.
 Run once before build_exe.bat: python make_icon.py
+
+All sizes use the full image resized with LANCZOS — Windows picks the
+appropriate embedded size automatically (256 for Explorer, 32 for taskbar, etc.)
 """
 from PIL import Image
 from pathlib import Path
@@ -15,12 +18,17 @@ if not SRC_PNG.exists():
     else:
         raise FileNotFoundError("No PNG found. Place app_icon_design.png in assets/")
 
-# Pillow ICO: dùng ảnh gốc lớn + sizes param (KHÔNG dùng append_images — đó là cho GIF)
 src = Image.open(SRC_PNG).convert("RGBA")
+print(f"Source: {SRC_PNG}  size={src.size}")
 
-SIZES = [(16,16), (24,24), (32,32), (48,48), (64,64), (128,128), (256,256)]
+SIZES = [256, 128, 64, 48, 32, 24, 16]
+images = [src.resize((s, s), Image.LANCZOS) for s in SIZES]
 
-src.save(str(DST_ICO), format="ICO", sizes=SIZES)
+images[0].save(
+    str(DST_ICO),
+    format="ICO",
+    append_images=images[1:],
+)
 
 # Verify
 from PIL import IcoImagePlugin
