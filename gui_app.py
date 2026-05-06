@@ -537,6 +537,8 @@ class BotApp(tk.Tk):
         # Update tracking
         self._update_available_tag: str = ''
         self._update_available_zip: str = ''
+        self._update_available_patch: str = ''
+        self._update_is_patch: bool = False
         self._bell_blink_on: bool = False
         self._build_ui()
         self._setup_logging()
@@ -780,7 +782,7 @@ class BotApp(tk.Tk):
     _PERIODIC_UPDATE_MS = 3 * 3600 * 1000  # 3 hours
 
     def _fetch_latest_release(self):
-        """Fetch latest GitHub release. Returns (tag, zip_url) or (None, None)."""
+        """Fetch latest GitHub release. Returns (tag, full_url, patch_url) or (None, None, None)."""
         try:
             req = urllib.request.Request(
                 GITHUB_API_LATEST,
@@ -790,27 +792,32 @@ class BotApp(tk.Tk):
                 data = json.loads(resp.read())
             latest_tag = data.get("tag_name", "").lstrip("v")
             if not latest_tag:
-                return None, None
+                return None, None, None
             def _ver(v):
                 try:
                     return tuple(int(x) for x in v.split('.') if x.isdigit())
                 except Exception:
                     return (0,)
             if _ver(latest_tag) <= _ver(APP_VERSION):
-                return None, None
-            zip_url = next(
-                (a["browser_download_url"] for a in data.get("assets", []) if a["name"].endswith(".zip")),
+                return None, None, None
+            assets = data.get("assets", [])
+            full_url = next(
+                (a["browser_download_url"] for a in assets if a["name"] == "InvoiceAdjustmentBot.zip"),
                 None,
             )
-            return latest_tag, zip_url
+            patch_url = next(
+                (a["browser_download_url"] for a in assets if a["name"] == "InvoiceAdjustmentBot-patch.zip"),
+                None,
+            )
+            return latest_tag, full_url, patch_url
         except Exception:
-            return None, None
+            return None, None, None
 
     def _check_update_bg(self):
         """Startup background check: if newer version exists, show dialog."""
-        tag, zip_url = self._fetch_latest_release()
+        tag, full_url, patch_url = self._fetch_latest_release()
         if tag:
-            self.after(0, lambda: self._show_update_dialog(tag, zip_url or ''))
+            self.after(0, lambda: self._show_update_dialog(tag, full_url or '', patch_url))
 
     def _schedule_periodic_check(self):
         """Schedule the next periodic version check (3 h)."""
@@ -819,14 +826,14 @@ class BotApp(tk.Tk):
 
     def _periodic_check_bg(self):
         """Periodic background check: show bell if new version found."""
-        tag, zip_url = self._fetch_latest_release()
+        tag, full_url, patch_url = self._fetch_latest_release()
         if tag and tag != self._update_available_tag:
-            self.after(0, lambda: self._notify_update_bell(tag, zip_url or ''))
+            self.after(0, lambda: self._notify_update_bell(tag, full_url or '', patch_url))
         self.after(0, self._schedule_periodic_check)
 
     # ── Update UI helpers ──────────────────────────────────────────────────────
 
-    def _show_update_dialog(self, tag: str, zip_url: str):
+    def _show_update_dialog(self, tag: str, zip_url: str, patch_url=None):
         """Modal dialog: new version found. Update now or later."""
         L = self._locale
         t = self._theme
@@ -855,7 +862,7 @@ class BotApp(tk.Tk):
         def _do_now():
             dlg.destroy()
             if zip_url:
-                self._start_download(zip_url, tag)
+                self._start_download(zip_url, tag, patch_url=patch_url)
             else:
                 self._update_banner.configure(
                     text=L.get('update_no_asset', 'Khong tim thay file tai'),
@@ -864,7 +871,7 @@ class BotApp(tk.Tk):
 
         def _do_later():
             dlg.destroy()
-            self._notify_update_bell(tag, zip_url)
+            self._notify_update_bell(tag, zip_url, patch_url)
 
         tk.Button(btn_row,
                   text=L.get('update_btn_now', 'Cap nhat ngay'),
@@ -881,10 +888,11 @@ class BotApp(tk.Tk):
                   relief=tk.FLAT, padx=18, pady=8, cursor='hand2',
                   ).pack(side=tk.LEFT)
 
-    def _notify_update_bell(self, tag: str, zip_url: str):
+    def _notify_update_bell(self, tag: str, zip_url: str, patch_url=None):
         """Store update info and show animated bell in header."""
         self._update_available_tag = tag
         self._update_available_zip = zip_url
+        self._update_available_patch = patch_url or ''
         try:
             self._update_bell.pack(side=tk.RIGHT, padx=(0, 2))
             self._bell_blink_on = True
@@ -912,29 +920,33 @@ class BotApp(tk.Tk):
         tag = self._update_available_tag
         zip_url = self._update_available_zip
         if tag:
-            self._show_update_dialog(tag, zip_url)
+            self._show_update_dialog(tag, zip_url, self._update_available_patch or None)
 
-    def _start_download(self, zip_url: str, tag: str):
-        """Show progress banner and download in background thread."""
+    def _start_download(self, zip_url: str, tag: str, patch_url=None):
+        """Show progress banner and download in background thread.
+        If running as frozen exe and patch_url is available, downloads patch only (~5 MB)."""
         self._bell_blink_on = False
         try:
             self._update_bell.pack_forget()
         except Exception:
             pass
+        is_patch = bool(patch_url) and getattr(sys, 'frozen', False)
+        url = patch_url if is_patch else zip_url
         lbl = self._locale.get('update_downloading', 'Dang tai')
         self._update_banner.configure(
             text=f"{lbl} v{tag}... 0%",
             bg=self._theme['btn_neutral'], fg=self._theme['fg'],
         )
         self._update_banner.pack(side=tk.LEFT, padx=(8, 0))
-        threading.Thread(target=self._download_thread, args=(zip_url, tag), daemon=True).start()
+        threading.Thread(target=self._download_thread, args=(url, tag, is_patch), daemon=True).start()
 
-    def _download_thread(self, zip_url: str, tag: str):
+    def _download_thread(self, zip_url: str, tag: str, is_patch: bool = False):
         try:
             tmp = tempfile.NamedTemporaryFile(suffix='.zip', delete=False)
             tmp.close()
             urllib.request.urlretrieve(zip_url, tmp.name, reporthook=self._download_progress)
             self._update_zip_path = tmp.name
+            self._update_is_patch = is_patch
             self.after(0, lambda: self._show_update_ready(tag))
         except Exception as e:
             self.after(0, lambda err=e: self._update_banner.configure(
@@ -958,13 +970,18 @@ class BotApp(tk.Tk):
     def _apply_update(self):
         if not self._update_zip_path or not Path(self._update_zip_path).exists():
             return
-        app_dir  = str(_PROJECT_ROOT)
         zip_path = self._update_zip_path
         exe_path = str(Path(sys.executable))
+        # Patch: extract vào _internal/ (runtime giữ nguyên, chỉ .pyc + assets thay)
+        # Full:  extract vào app_dir (thay toàn bộ kể cả _internal/)
+        if self._update_is_patch and getattr(sys, 'frozen', False):
+            dest_dir = str(Path(sys.executable).parent / '_internal')
+        else:
+            dest_dir = str(_PROJECT_ROOT)
         bat_lines = [
             '@echo off',
             'timeout /t 2 /nobreak >nul',
-            f'powershell -Command "Expand-Archive -Path \'\'{zip_path}\'\' -DestinationPath \'\'{app_dir}\'\' -Force"',
+            f'powershell -Command "Expand-Archive -Path \'\'{zip_path}\'\' -DestinationPath \'\'{dest_dir}\'\' -Force"',
             f'del /f /q "{zip_path}"',
             f'start "" "{exe_path}"',
             'del /f /q "%~f0"',

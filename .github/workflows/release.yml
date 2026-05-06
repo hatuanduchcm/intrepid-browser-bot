@@ -93,11 +93,24 @@ jobs:
           Compress-Archive -Path dist\InvoiceAdjustmentBot\* `
             -DestinationPath InvoiceAdjustmentBot.zip
 
+      - name: Create patch zip
+        shell: pwsh
+        run: |
+          $internal = "dist\InvoiceAdjustmentBot\_internal"
+          New-Item -ItemType Directory -Force patch_tmp | Out-Null
+          Copy-Item "$internal\PYZ-00.pyz"  patch_tmp\
+          Copy-Item "$internal\version.txt" patch_tmp\
+          Copy-Item "$internal\assets"  -Destination patch_tmp\assets  -Recurse -ErrorAction SilentlyContinue
+          Copy-Item "$internal\locales" -Destination patch_tmp\locales -Recurse -ErrorAction SilentlyContinue
+          Compress-Archive -Path patch_tmp\* -DestinationPath InvoiceAdjustmentBot-patch.zip
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: InvoiceAdjustmentBot
-          path: InvoiceAdjustmentBot.zip
+          path: |
+            InvoiceAdjustmentBot.zip
+            InvoiceAdjustmentBot-patch.zip
           retention-days: 1
 
   release:
@@ -145,4 +158,5 @@ jobs:
             --repo $repo `
             --title $tag `
             --notes "Auto-release from commit ${{ github.sha }}" `
-            InvoiceAdjustmentBot.zip
+            InvoiceAdjustmentBot.zip `
+            InvoiceAdjustmentBot-patch.zip

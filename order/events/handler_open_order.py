@@ -52,8 +52,9 @@ def handle_open_order_event(event_payload):
             # Navigate to the order page via address bar using keyboard (more reliable)
             try:
                 brand = event_payload.get('brand')
-                if brand is not None and not _should_process_brand(brand):
-                    logging.debug('Skipping open_order because brand "%s" same as last processed', brand)
+                venture_ev = event_payload.get('venture', '')
+                if brand is not None and not _should_process_brand(brand, venture=venture_ev):
+                    logging.debug('Skipping open_order because brand "%s" (venture=%s) same as last processed', brand, venture_ev)
                 else:
                     navigated = _navigate_to_order_portal(edits, venture=event_payload.get('venture', 'VN'))
                     if not navigated:
@@ -131,38 +132,35 @@ def handle_open_order_event(event_payload):
         logger.debug('open_order failed: %s', e)
     return False
 
-LAST_PROCESSED_BRAND = None
+LAST_PROCESSED_STATE = (None, None)  # (brand_lower, venture_upper)
 
 
-def _should_process_brand(brand_name: str) -> bool:
-    """Return True if this brand should be processed (not duplicate of last)."""
-    global LAST_PROCESSED_BRAND
+def _should_process_brand(brand_name: str, venture: str = '') -> bool:
+    """Return True if navigation is needed (brand+venture combo differs from last)."""
+    global LAST_PROCESSED_STATE
     if not brand_name:
         return False
-    if LAST_PROCESSED_BRAND and str(brand_name).strip().lower() == str(LAST_PROCESSED_BRAND).strip().lower():
-        logging.debug('Brand "%s" same as last processed; skipping', brand_name)
+    key = (str(brand_name).strip().lower(), str(venture).strip().upper())
+    if LAST_PROCESSED_STATE == key:
+        logging.debug('Brand "%s" (venture=%s) same as last; skipping navigation', brand_name, venture)
         return False
-    LAST_PROCESSED_BRAND = brand_name
+    LAST_PROCESSED_STATE = key
     return True
 
 def _navigate_to_order_portal(edits, venture: str = 'VN') -> bool:
-    """Focus an Edit control and navigate to the order portal URL. Returns True on success."""
+    """Navigate the browser address bar to the order portal URL. Returns True on success."""
     try:
-        from pywinauto.keyboard import send_keys
         import pyautogui
+
+        url = _order_portal_url(venture)
+        logger.debug('Navigating to order portal: %s', url)
+
         edits_sorted = sorted(edits, key=lambda e: e.rectangle().width, reverse=True)
         addr = edits_sorted[0]
-        # focus address/control and try to set URL directly (preferred for non-standard browsers)
         addr.set_focus()
-        time.sleep(1.2)
-        url = _order_portal_url(venture)
-        try:
-            addr.set_text(url)
-            time.sleep(0.3)
-        except Exception:
-            send_keys('^a{BACKSPACE}')
-            time.sleep(0.3)
-            send_keys(url)
+        time.sleep(0.3)
+        addr.set_text(url)
+        time.sleep(0.2)
         send_keys('{ENTER}')
 
         # Wait for order input box (image) to appear, up to 15s

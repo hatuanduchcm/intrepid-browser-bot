@@ -8,25 +8,26 @@ import time
 import logging
 from utils.twofa_cache import is_brand_verified
 
-# remember last processed brand to avoid duplicate work
-LAST_PROCESSED_BRAND = None
+# remember last processed (brand, venture) to avoid duplicate work
+LAST_PROCESSED_STATE = (None, None)  # (brand_lower, venture_upper)
 # cache last brand search outcome: brand -> bool (True=found, False=not found)
 LAST_BRAND_STATUS: dict = {}
 
 
-def should_process_brand(brand_name: str) -> bool:
-    """Return True if this brand should be processed (not duplicate of last)."""
-    global LAST_PROCESSED_BRAND
+def should_process_brand(brand_name: str, venture: str = '') -> bool:
+    """Return True if this (brand, venture) combo differs from the last processed one."""
+    global LAST_PROCESSED_STATE
     if not brand_name:
         return False
-    if LAST_PROCESSED_BRAND and str(brand_name).strip().lower() == str(LAST_PROCESSED_BRAND).strip().lower():
-        logging.debug('Brand "%s" same as last processed; skipping', brand_name)
+    key = (str(brand_name).strip().lower(), str(venture).strip().upper())
+    if LAST_PROCESSED_STATE == key:
+        logging.debug('Brand "%s" (venture=%s) same as last processed; skipping', brand_name, venture)
         return False
-    LAST_PROCESSED_BRAND = brand_name
+    LAST_PROCESSED_STATE = key
     return True
 
 
-def start_and_search_brand(brand_name: str):
+def start_and_search_brand(brand_name: str, venture: str = ''):
     """Orchestrate the steps to search for a brand and select the result."""
     # ensure window present
     w = get_intrepid_window()
@@ -39,7 +40,7 @@ def start_and_search_brand(brand_name: str):
         logging.debug('Previously marked "%s" as not found; skipping search', brand_name)
         return False
     
-    if not should_process_brand(brand_name):
+    if not should_process_brand(brand_name, venture=venture):
         return True
 
     if not handle_click_search_icon({}):
@@ -84,4 +85,5 @@ def handle_search_brand_event(event_payload):
     brand = event_payload.get('brand')
     if not brand:
         raise RuntimeError('Missing brand in payload')
-    return start_and_search_brand(brand)
+    venture = event_payload.get('venture', '')
+    return start_and_search_brand(brand, venture=venture)

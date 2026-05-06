@@ -142,7 +142,7 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
                 continue
             try:
                 logger.info('[%s] Searching platform: %s', order_id, platform)
-                found = handle_search_brand_event({'brand': platform})
+                found = handle_search_brand_event({'brand': platform, 'venture': venture})
                 if not found:
                     logger.error('[%s] ERROR — Platform not found: %s', order_id, platform)
                     _stat('error', order_id=order_id, venture=venture, brand=platform,

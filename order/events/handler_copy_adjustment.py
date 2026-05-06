@@ -354,10 +354,10 @@ def _capture_adjustment_area(cx: int = None, cy: int = None, popup_mode: bool = 
         return None
     
 def find_order_adjustment_block(
-    max_scrolls: int = 60,
+    max_scrolls: int = 30,
     confidence: float = 0.8,
-    scroll_amount: int = -150,
-    delay: float = 0.3
+    scroll_amount: int = -400,
+    delay: float = 0.5
 ) -> Optional[dict]:
     """
     Scroll page and find Order Adjustment block using image recognition.
@@ -382,15 +382,35 @@ def find_order_adjustment_block(
                     # Record coordinates BEFORE any scroll so they are accurate
                     center_x = match.left + match.width // 2
                     center_y = match.top + match.height // 2
-                    # Scroll slightly so the table rows below become visible
-                    pyautogui.scroll(-80)
-                    time.sleep(0.15)
-                    # Re-locate to get updated on-screen position after scroll
-                    match2 = pyautogui.locateOnScreen(str(_p), confidence=confidence, grayscale=True)
-                    if match2:
-                        center_x = match2.left + match2.width // 2
-                        center_y = match2.top + match2.height // 2
                     logger.debug('Found adjustment block via %s at (%s, %s)', _p.name, center_x, center_y)
+
+                    # Scroll down until total_adjustment_amount_line is visible on screen.
+                    # The ? icon only renders once the total row is in viewport.
+                    total_tpl = _icons_dir / 'total_adjustment_amount_line.png'
+                    if total_tpl.exists():
+                        for _s in range(15):  # max 15 small steps (~450px)
+                            try:
+                                if pyautogui.locateOnScreen(str(total_tpl), confidence=0.75, grayscale=True):
+                                    logger.debug('total_adjustment_amount_line visible after %d extra scrolls', _s)
+                                    break
+                            except Exception:
+                                pass
+                            pyautogui.scroll(-30)
+                            time.sleep(0.12)
+                    else:
+                        # Fallback: one small nudge like before
+                        pyautogui.scroll(-80)
+                        time.sleep(0.15)
+
+                    # Re-locate block header to get updated position after scrolling
+                    try:
+                        match2 = pyautogui.locateOnScreen(str(_p), confidence=confidence, grayscale=True)
+                        if match2:
+                            center_x = match2.left + match2.width // 2
+                            center_y = match2.top + match2.height // 2
+                    except Exception:
+                        pass
+
                     return {"found": True, "x": center_x, "y": center_y}
             except Exception as e:
                 logger.debug('locateOnScreen failed for %s: %s', _p.name, e)
