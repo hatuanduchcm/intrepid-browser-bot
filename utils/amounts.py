@@ -50,7 +50,8 @@ def clean_amount(amount: Optional[str], venture: str = '') -> List[str]:
             if m_force:
                 int_part_raw = m_force.group(1)
                 dec_part = m_force.group(2)
-                int_part = _re2.sub(r'[\/,]', '7', int_part_raw)
+                # Only replace '/' with '7' (OCR misread), NOT commas (thousand separators)
+                int_part = _re2.sub(r'\/', '7', int_part_raw)
                 int_part = _re2.sub(r'[^\d]', '', int_part)
                 if int_part:
                     int_part_fmt = f"{int(int_part):,}"

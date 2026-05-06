@@ -86,10 +86,9 @@ def ocr_image(path, scale: float = 3.0):
             except Exception:
                 logger.debug('easyocr failed', exc_info=True)
 
-        # remove intermediate proc file if input was itself a proc_* file
+        # Always remove the intermediate proc file after OCR (it's a temp artifact)
         try:
-            if p.stem.startswith('proc_'):
-                proc_path.unlink(missing_ok=True)
+            proc_path.unlink(missing_ok=True)
         except Exception:
             logger.debug('failed to remove intermediate proc file: %s', proc_path)
 

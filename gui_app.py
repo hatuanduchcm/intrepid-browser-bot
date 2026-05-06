@@ -216,14 +216,11 @@ class _SettingsDialog(tk.Toplevel):
         ('GSHEET_SHEET_NAME',            'settings_label_sheet_name', False, False, False),
         ('GOOGLE_SERVICE_ACCOUNT_PATH',  'settings_label_sa_json',    False, True,  False),
     ]
-    _INTREPID_FIELDS = [
-        ('INTREPID_USER_TEMPLATE', 'settings_label_user_tpl', False, False, False),
-        ('INTREPID_PASS',          'settings_label_pass',     True,  False, False),
+    _AI_FIELDS = [
+        ('GOOGLE_GEMINI_API_KEY',   'settings_label_gemini_key',   True,  False, False),
+        ('GOOGLE_GEMINI_MODEL',     'settings_label_gemini_model', False, False, False),
     ]
-    _INTREPID_ID_FIELDS = [
-        ('INTREPID_USER_ID',  'settings_label_user_id',  False, False, False),
-        ('INTREPID_PASS_ID',  'settings_label_pass_id',  True,  False, False),
-    ]
+    _VENTURE_CODES = ["VN", "MY", "ID", "SG", "PH", "TH"]
 
     def __init__(self, parent: 'BotApp'):
         super().__init__(parent)
@@ -333,15 +330,91 @@ class _SettingsDialog(tk.Toplevel):
         for i, (ek, lk, pw, fp, jj) in enumerate(self._GSHEET_FIELDS):
             _add_field(gs, i, ek, lk, pw, fp, jj)
 
-        # ── Section: Intrepid Browser ─────────────────────────────────────────
-        ib = _section('settings_section_intrepid')
-        for i, (ek, lk, pw, fp, jj) in enumerate(self._INTREPID_FIELDS):
-            _add_field(ib, i, ek, lk, pw, fp, jj)
+        # ── Section: AI (Google Gemini) ───────────────────────────────────────
+        ai = _section('settings_section_ai')
+        for i, (ek, lk, pw, fp, jj) in enumerate(self._AI_FIELDS):
+            _add_field(ai, i, ek, lk, pw, fp, jj)
 
-        # ── Section: Intrepid ID (special) ────────────────────────────────────
-        ii = _section('settings_section_intrepid_id')
-        for i, (ek, lk, pw, fp, jj) in enumerate(self._INTREPID_ID_FIELDS):
-            _add_field(ii, i, ek, lk, pw, fp, jj)
+        # ── Section: Intrepid Accounts per Venture ────────────────────────────
+        va = _section('settings_section_intrepid_accounts')
+        va.columnconfigure(1, weight=1)
+        va.columnconfigure(2, weight=1)
+
+        # Common password (fallback when per-venture pass is empty)
+        tk.Label(va, text=L.get('settings_label_common_pass', 'Common Password:'),
+                 bg=t['bg'], fg=t['fg'], font=('Segoe UI', 9), anchor=tk.W, width=22,
+                 ).grid(row=0, column=0, sticky=tk.W, padx=(8, 4), pady=(8, 4))
+        _cp_cell = tk.Frame(va, bg=t['bg'])
+        _cp_cell.grid(row=0, column=1, columnspan=2, sticky=tk.EW, padx=(0, 8), pady=(8, 4))
+        _cp_cell.columnconfigure(0, weight=1)
+        _cp_var = tk.StringVar(value=os.getenv('INTREPID_PASS', ''))
+        self._vars['INTREPID_PASS'] = _cp_var
+        _cp_entry = tk.Entry(_cp_cell, textvariable=_cp_var, show='•',
+                             bg=t['entry_bg'], fg=t['fg'], insertbackground=t['fg'],
+                             relief=tk.FLAT, font=('Consolas', 9))
+        _cp_entry.grid(row=0, column=0, sticky=tk.EW)
+        self._show_pass['INTREPID_PASS'] = False
+        def _toggle_cp(e=_cp_entry):
+            self._show_pass['INTREPID_PASS'] = not self._show_pass['INTREPID_PASS']
+            e.configure(show='' if self._show_pass['INTREPID_PASS'] else '•')
+            self._eye_btns['INTREPID_PASS'].configure(
+                text='🙈' if self._show_pass['INTREPID_PASS'] else '👁')
+        _cp_eye = tk.Button(_cp_cell, text='👁', command=_toggle_cp,
+                            bg=t['bg2'], fg=t['fg'], relief=tk.FLAT,
+                            font=('Segoe UI', 10), padx=6, cursor='hand2')
+        _cp_eye.grid(row=0, column=1, padx=(4, 0))
+        self._eye_btns['INTREPID_PASS'] = _cp_eye
+
+        # Column headers
+        _hdr = {'bg': t['bg'], 'fg': t['fg2'], 'font': ('Segoe UI', 9, 'bold')}
+        tk.Label(va, text=L.get('settings_col_venture', 'Venture'), **_hdr, width=10,
+                 ).grid(row=1, column=0, sticky=tk.W, padx=(8, 4), pady=(6, 2))
+        tk.Label(va, text=L.get('settings_col_user', 'Email / User'), **_hdr,
+                 ).grid(row=1, column=1, sticky=tk.W, pady=(6, 2))
+        tk.Label(va, text=L.get('settings_col_pass', 'Password'), **_hdr,
+                 ).grid(row=1, column=2, sticky=tk.W, padx=(8, 0), pady=(6, 2))
+
+        # Per-venture rows
+        _tmpl = os.getenv('INTREPID_USER_TEMPLATE', 'ssc.{venture}@intrepid.asia')
+        for vi, code in enumerate(self._VENTURE_CODES):
+            row = vi + 2
+            uk = f'INTREPID_USER_{code}'
+            pk = f'INTREPID_PASS_{code}'
+            _default_user = os.getenv(uk) or _tmpl.format(venture=code)
+            _default_pass = os.getenv(pk, '')
+
+            tk.Label(va, text=code, bg=t['bg'], fg=t['accent'],
+                     font=('Segoe UI', 10, 'bold'), width=10,
+                     ).grid(row=row, column=0, sticky=tk.W, padx=(8, 4), pady=3)
+
+            u_var = tk.StringVar(value=_default_user)
+            self._vars[uk] = u_var
+            tk.Entry(va, textvariable=u_var,
+                     bg=t['entry_bg'], fg=t['fg'], insertbackground=t['fg'],
+                     relief=tk.FLAT, font=('Consolas', 9),
+                     ).grid(row=row, column=1, sticky=tk.EW, padx=(0, 4), pady=3)
+
+            p_var = tk.StringVar(value=_default_pass)
+            self._vars[pk] = p_var
+            _p_cell = tk.Frame(va, bg=t['bg'])
+            _p_cell.grid(row=row, column=2, sticky=tk.EW, padx=(4, 8), pady=3)
+            _p_cell.columnconfigure(0, weight=1)
+            _p_entry = tk.Entry(_p_cell, textvariable=p_var, show='•',
+                                bg=t['entry_bg'], fg=t['fg'], insertbackground=t['fg'],
+                                relief=tk.FLAT, font=('Consolas', 9))
+            _p_entry.grid(row=0, column=0, sticky=tk.EW)
+            self._show_pass[pk] = False
+            def _mk_toggle(ek=pk, e=_p_entry):
+                def _toggle():
+                    self._show_pass[ek] = not self._show_pass[ek]
+                    e.configure(show='' if self._show_pass[ek] else '•')
+                    self._eye_btns[ek].configure(text='🙈' if self._show_pass[ek] else '👁')
+                return _toggle
+            _p_eye = tk.Button(_p_cell, text='👁', command=_mk_toggle(),
+                               bg=t['bg2'], fg=t['fg'], relief=tk.FLAT,
+                               font=('Segoe UI', 10), padx=6, cursor='hand2')
+            _p_eye.grid(row=0, column=1, padx=(4, 0))
+            self._eye_btns[pk] = _p_eye
 
         # bottom padding inside scroll area
         tk.Frame(body, bg=t['bg'], height=8).pack()
@@ -369,7 +442,7 @@ class _SettingsDialog(tk.Toplevel):
         self.geometry(f'800x640+{pw_x}+{pw_y}')
 
     def _save(self):
-        all_fields = self._GSHEET_FIELDS + self._INTREPID_FIELDS + self._INTREPID_ID_FIELDS
+        all_fields = self._GSHEET_FIELDS + self._AI_FIELDS
         for env_key, _, _, is_path, _ in all_fields:
             if is_path and env_key in self._textareas:
                 val = self._textareas[env_key].get('1.0', tk.END).strip()
@@ -381,11 +454,26 @@ class _SettingsDialog(tk.Toplevel):
                     set_key(str(_ENV_FILE), env_key, val)
             except Exception:
                 pass
+
+        # Per-venture + common password
+        extra_keys = ['INTREPID_PASS']
+        for code in self._VENTURE_CODES:
+            extra_keys += [f'INTREPID_USER_{code}', f'INTREPID_PASS_{code}']
+        for ek in extra_keys:
+            if ek not in self._vars:
+                continue
+            val = self._vars[ek].get().strip()
+            os.environ[ek] = val
+            try:
+                if _ENV_FILE.exists():
+                    set_key(str(_ENV_FILE), ek, val)
+            except Exception:
+                pass
+
         # sync sheet fields back to main window
         try:
             self._parent._sheet_id_var.set(os.getenv('GSHEET_ID', ''))
             self._parent._sheet_name_var.set(os.getenv('GSHEET_SHEET_NAME', ''))
-            self._parent._sa_path_var.set(os.getenv('GOOGLE_SERVICE_ACCOUNT_PATH', ''))
         except Exception:
             pass
         msg = self._parent._locale.get('settings_saved', 'Settings saved.')
@@ -405,7 +493,11 @@ class BotApp(tk.Tk):
 
         # Venture checkboxes
         self._venture_codes = ["VN", "MY", "ID", "SG", "PH", "TH"]
-        self._venture_vars = {code: tk.BooleanVar(value=True) for code in self._venture_codes}
+        _saved_ventures_str = os.getenv("SELECTED_VENTURES", ",".join(self._venture_codes))
+        _saved_ventures = set(s.strip() for s in _saved_ventures_str.split(",") if s.strip()) or set(self._venture_codes)
+        self._venture_vars = {code: tk.BooleanVar(value=(code in _saved_ventures)) for code in self._venture_codes}
+        for _code in self._venture_codes:
+            self._venture_vars[_code].trace_add("write", lambda *_: self._save_ventures())
 
         # Set icon — iconbitmap only (wm_iconphoto causes blurry rendering)
         _ico = _PROJECT_ROOT / 'assets' / 'app_icon.ico'
@@ -442,11 +534,17 @@ class BotApp(tk.Tk):
         self._blink_on: bool = False
         self._update_zip_path: str | None = None   # path to downloaded update ZIP
         self._is_paused: bool = False
+        # Update tracking
+        self._update_available_tag: str = ''
+        self._update_available_zip: str = ''
+        self._bell_blink_on: bool = False
         self._build_ui()
         self._setup_logging()
         self._poll_log_queue()
-        # Start background update check after UI is ready
-        threading.Thread(target=self._check_update_bg, daemon=True).start()
+        # Startup update check (after small delay so UI renders first)
+        self.after(2000, lambda: threading.Thread(target=self._check_update_bg, daemon=True).start())
+        # Periodic check every 3 hours
+        self._schedule_periodic_check()
 
     # ── Flag images ──────────────────────────────────────────────────────────
 
@@ -516,6 +614,13 @@ class BotApp(tk.Tk):
                         w.configure(bg=t["btn_neutral"], fg=t["btn_neu_fg"], state=tk.DISABLED)
                 elif role == "btn_neutral":
                     w.configure(bg=t["btn_neutral"], fg=t["btn_neu_fg"])
+                elif role == "venture_cb":
+                    w.configure(
+                        bg=t["bg"], fg=t["fg"],
+                        selectcolor=t["bg2"],
+                        activebackground=t["bg"],
+                        activeforeground=t["accent"],
+                    )
                 elif role == "btn_toggle":
                     w.configure(bg=t["bg2"], fg=t["fg"])
                 elif role == "btn_lang":
@@ -611,8 +716,6 @@ class BotApp(tk.Tk):
             self._settings_lf.configure(text=L.get("section_settings", ""))
             self._lbl_sheet_id.configure(text=L.get("label_sheet_id", ""))
             self._lbl_sheet_name.configure(text=L.get("label_sheet_name", ""))
-            self._lbl_sa_json.configure(text=L.get("label_sa_json", ""))
-            self._btn_browse.configure(text=L.get("btn_browse", ""))
             _is_running = bool(self._bot_process and self._bot_process.is_alive())
             if not _is_running and not self._is_paused:
                 self._play_pause_btn.configure(text=L.get("btn_run", ""))
@@ -643,6 +746,16 @@ class BotApp(tk.Tk):
         except Exception:
             pass
 
+    def _save_ventures(self):
+        """Persist selected ventures to .env so state survives restarts."""
+        selected = ",".join(v for v in self._venture_codes if self._venture_vars[v].get())
+        os.environ["SELECTED_VENTURES"] = selected
+        try:
+            if _ENV_FILE.exists():
+                set_key(str(_ENV_FILE), "SELECTED_VENTURES", selected)
+        except Exception:
+            pass
+
     def _toggle_lang(self):
         self._lang = "en" if self._lang == "vi" else "vi"
         self._locale = LOCALES[self._lang]
@@ -664,8 +777,10 @@ class BotApp(tk.Tk):
 
     # ── Auto-update ───────────────────────────────────────────────────────────────
 
-    def _check_update_bg(self):
-        """Background thread: check GitHub latest release, download ZIP if newer."""
+    _PERIODIC_UPDATE_MS = 3 * 3600 * 1000  # 3 hours
+
+    def _fetch_latest_release(self):
+        """Fetch latest GitHub release. Returns (tag, zip_url) or (None, None)."""
         try:
             req = urllib.request.Request(
                 GITHUB_API_LATEST,
@@ -674,65 +789,189 @@ class BotApp(tk.Tk):
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read())
             latest_tag = data.get("tag_name", "").lstrip("v")
-            if not latest_tag or latest_tag == APP_VERSION:
-                return
-            # Find ZIP asset
-            zip_url = None
-            for asset in data.get("assets", []):
-                if asset["name"].endswith(".zip"):
-                    zip_url = asset["browser_download_url"]
-                    break
-            if not zip_url:
-                return
-            # Download to temp file (background, shows progress via after())
-            tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+            if not latest_tag:
+                return None, None
+            def _ver(v):
+                try:
+                    return tuple(int(x) for x in v.split('.') if x.isdigit())
+                except Exception:
+                    return (0,)
+            if _ver(latest_tag) <= _ver(APP_VERSION):
+                return None, None
+            zip_url = next(
+                (a["browser_download_url"] for a in data.get("assets", []) if a["name"].endswith(".zip")),
+                None,
+            )
+            return latest_tag, zip_url
+        except Exception:
+            return None, None
+
+    def _check_update_bg(self):
+        """Startup background check: if newer version exists, show dialog."""
+        tag, zip_url = self._fetch_latest_release()
+        if tag:
+            self.after(0, lambda: self._show_update_dialog(tag, zip_url or ''))
+
+    def _schedule_periodic_check(self):
+        """Schedule the next periodic version check (3 h)."""
+        self.after(self._PERIODIC_UPDATE_MS,
+                   lambda: threading.Thread(target=self._periodic_check_bg, daemon=True).start())
+
+    def _periodic_check_bg(self):
+        """Periodic background check: show bell if new version found."""
+        tag, zip_url = self._fetch_latest_release()
+        if tag and tag != self._update_available_tag:
+            self.after(0, lambda: self._notify_update_bell(tag, zip_url or ''))
+        self.after(0, self._schedule_periodic_check)
+
+    # ── Update UI helpers ──────────────────────────────────────────────────────
+
+    def _show_update_dialog(self, tag: str, zip_url: str):
+        """Modal dialog: new version found. Update now or later."""
+        L = self._locale
+        t = self._theme
+        dlg = tk.Toplevel(self)
+        dlg.title(L.get('update_title', 'Cap nhat'))
+        dlg.configure(bg=t['bg'])
+        dlg.resizable(False, False)
+        dlg.grab_set()
+        dlg.update_idletasks()
+        px = self.winfo_x() + (self.winfo_width()  - 440) // 2
+        py = self.winfo_y() + (self.winfo_height() - 190) // 2
+        dlg.geometry(f'440x190+{px}+{py}')
+
+        tk.Label(dlg,
+                 text=f"v{tag}  -  {L.get('update_available', 'Co phien ban moi')}",
+                 bg=t['bg'], fg=t['accent'],
+                 font=('Segoe UI', 13, 'bold')).pack(pady=(22, 6))
+        tk.Label(dlg,
+                 text=L.get('update_body', 'Ban co muon tai va cap nhat ngay khong?'),
+                 bg=t['bg'], fg=t['fg'],
+                 font=('Segoe UI', 10)).pack(pady=(0, 18))
+
+        btn_row = tk.Frame(dlg, bg=t['bg'])
+        btn_row.pack()
+
+        def _do_now():
+            dlg.destroy()
+            if zip_url:
+                self._start_download(zip_url, tag)
+            else:
+                self._update_banner.configure(
+                    text=L.get('update_no_asset', 'Khong tim thay file tai'),
+                    bg=t['btn_neutral'], fg=t['log_error'])
+                self._update_banner.pack(side=tk.LEFT, padx=(8, 0))
+
+        def _do_later():
+            dlg.destroy()
+            self._notify_update_bell(tag, zip_url)
+
+        tk.Button(btn_row,
+                  text=L.get('update_btn_now', 'Cap nhat ngay'),
+                  command=_do_now,
+                  bg=t['accent'], fg=t['accent_fg'],
+                  font=('Segoe UI', 10, 'bold'),
+                  relief=tk.FLAT, padx=18, pady=8, cursor='hand2',
+                  ).pack(side=tk.LEFT, padx=(0, 10))
+        tk.Button(btn_row,
+                  text=L.get('update_btn_later', 'De sau'),
+                  command=_do_later,
+                  bg=t['btn_neutral'], fg=t['btn_neu_fg'],
+                  font=('Segoe UI', 10),
+                  relief=tk.FLAT, padx=18, pady=8, cursor='hand2',
+                  ).pack(side=tk.LEFT)
+
+    def _notify_update_bell(self, tag: str, zip_url: str):
+        """Store update info and show animated bell in header."""
+        self._update_available_tag = tag
+        self._update_available_zip = zip_url
+        try:
+            self._update_bell.pack(side=tk.RIGHT, padx=(0, 2))
+            self._bell_blink_on = True
+            self._blink_bell()
+        except Exception:
+            pass
+
+    def _blink_bell(self):
+        if not self._bell_blink_on:
+            return
+        try:
+            cur = self._update_bell.cget('text')
+            self._update_bell.configure(text='\U0001f514' if cur == '\U0001f515' else '\U0001f515')
+        except Exception:
+            return
+        self.after(900, self._blink_bell)
+
+    def _on_bell_click(self):
+        """Bell clicked — stop blink and show update dialog."""
+        self._bell_blink_on = False
+        try:
+            self._update_bell.configure(text='\U0001f514')
+        except Exception:
+            pass
+        tag = self._update_available_tag
+        zip_url = self._update_available_zip
+        if tag:
+            self._show_update_dialog(tag, zip_url)
+
+    def _start_download(self, zip_url: str, tag: str):
+        """Show progress banner and download in background thread."""
+        self._bell_blink_on = False
+        try:
+            self._update_bell.pack_forget()
+        except Exception:
+            pass
+        lbl = self._locale.get('update_downloading', 'Dang tai')
+        self._update_banner.configure(
+            text=f"{lbl} v{tag}... 0%",
+            bg=self._theme['btn_neutral'], fg=self._theme['fg'],
+        )
+        self._update_banner.pack(side=tk.LEFT, padx=(8, 0))
+        threading.Thread(target=self._download_thread, args=(zip_url, tag), daemon=True).start()
+
+    def _download_thread(self, zip_url: str, tag: str):
+        try:
+            tmp = tempfile.NamedTemporaryFile(suffix='.zip', delete=False)
             tmp.close()
-            self.after(0, lambda: self._show_update_downloading(latest_tag))
             urllib.request.urlretrieve(zip_url, tmp.name, reporthook=self._download_progress)
             self._update_zip_path = tmp.name
-            self.after(0, lambda: self._show_update_ready(latest_tag))
-        except Exception:
-            pass  # silently ignore: offline / API rate limit etc.
+            self.after(0, lambda: self._show_update_ready(tag))
+        except Exception as e:
+            self.after(0, lambda err=e: self._update_banner.configure(
+                text=f"{self._locale.get('update_failed', 'Tai that bai')}: {err}",
+                bg=self._theme['btn_neutral'], fg=self._theme['log_error'],
+            ))
 
     def _download_progress(self, block_num, block_size, total_size):
         if total_size <= 0:
             return
-        downloaded = block_num * block_size
-        pct = min(int(downloaded * 100 / total_size), 99)
-        self.after(0, lambda p=pct: self._update_banner.configure(
-            text=f"📥 Đang tải bản mới... {p}%"
-        ))
-
-    def _show_update_downloading(self, tag: str):
-        self._update_banner.configure(text=f"📥 Đang tải bản mới {tag}...")
-        self._update_banner.pack(side=tk.LEFT, padx=(8, 0))
+        pct = min(int(block_num * block_size * 100 / total_size), 99)
+        lbl = self._locale.get('update_downloading', 'Dang tai')
+        self.after(0, lambda p=pct: self._update_banner.configure(text=f"{lbl}... {p}%"))
 
     def _show_update_ready(self, tag: str):
-        self._update_banner.configure(
-            text=f"🔄 Cập nhật v{tag} sẵn sàng — Nhấp để khởi động lại",
-            bg="#a6e3a1", fg="#1e1e2e",
-        )
+        """Download complete — prompt user to restart."""
+        lbl = self._locale.get('update_ready', 'v{tag} san sang - Nhap de khoi dong lai').format(tag=tag)
+        self._update_banner.configure(text=lbl, bg='#a6e3a1', fg='#1e1e2e')
         self._update_banner.pack(side=tk.LEFT, padx=(8, 0))
 
     def _apply_update(self):
         if not self._update_zip_path or not Path(self._update_zip_path).exists():
             return
-        app_dir = str(_PROJECT_ROOT)
+        app_dir  = str(_PROJECT_ROOT)
         zip_path = self._update_zip_path
         exe_path = str(Path(sys.executable))
-
-        # Write updater.bat into temp dir — runs after this process exits
         bat_lines = [
-            "@echo off",
-            "timeout /t 2 /nobreak >nul",
-            f'powershell -Command "Expand-Archive -Path \'\'{zip_path}\'\' -DestinationPath \'\'{app_dir}\'\'  -Force"',
+            '@echo off',
+            'timeout /t 2 /nobreak >nul',
+            f'powershell -Command "Expand-Archive -Path \'\'{zip_path}\'\' -DestinationPath \'\'{app_dir}\'\' -Force"',
             f'del /f /q "{zip_path}"',
             f'start "" "{exe_path}"',
-            f'del /f /q "%~f0"',   # self-delete
+            'del /f /q "%~f0"',
         ]
-        bat_path = Path(tempfile.gettempdir()) / "iab_updater.bat"
-        bat_path.write_text("\n".join(bat_lines), encoding="utf-8")
-        subprocess.Popen(["cmd", "/c", str(bat_path)], creationflags=subprocess.CREATE_NO_WINDOW)
+        bat_path = Path(tempfile.gettempdir()) / 'iab_updater.bat'
+        bat_path.write_text('\n'.join(bat_lines), encoding='utf-8')
+        subprocess.Popen(['cmd', '/c', str(bat_path)], creationflags=subprocess.CREATE_NO_WINDOW)
         self.destroy()
         sys.exit(0)
 
@@ -754,7 +993,7 @@ class BotApp(tk.Tk):
         ), "header_label")
         self._header_lbl.pack(side=tk.LEFT, expand=True)
 
-        # Update banner (hidden by default, shown when update ready)
+        # Update banner (hidden by default, shown during download / ready)
         self._update_banner = tk.Button(
             header,
             text="",
@@ -762,6 +1001,14 @@ class BotApp(tk.Tk):
             bg="#a6e3a1", fg="#1e1e2e",
             font=("Segoe UI", 9, "bold"),
             relief=tk.FLAT, padx=10, pady=4, cursor="hand2", bd=0,
+        )
+        # Bell button (hidden by default, shown when update available & user chose 'later')
+        self._update_bell = tk.Button(
+            header, text="\U0001f514",
+            command=self._on_bell_click,
+            bg=t["bg2"], fg="#fab387",
+            font=("Segoe UI", 13),
+            relief=tk.FLAT, padx=4, pady=2, cursor="hand2", bd=0,
         )
         # Don't pack yet — shown only when update available
         _flag_img = self._flag_imgs.get(self._lang)
@@ -815,20 +1062,7 @@ class BotApp(tk.Tk):
                  bg=t["entry_bg"], fg=t["fg"], insertbackground=t["fg"],
                  relief=tk.FLAT, font=("Consolas", 9)), "entry").grid(row=1, column=1, sticky=tk.EW, padx=8, pady=6)
 
-        # Row 2 — Service Account JSON path
-        self._lbl_sa_json = self._reg(tk.Label(settings, text=self._("label_sa_json"), bg=t["bg"], fg=t["fg"],
-                 font=("Segoe UI", 10)), "label")
-        self._lbl_sa_json.grid(row=2, column=0, sticky=tk.W, padx=8, pady=6)
-        json_frame = self._reg(tk.Frame(settings, bg=t["bg"]), "entry_frame")
-        json_frame.grid(row=2, column=1, sticky=tk.EW, padx=8, pady=6)
         self._sa_path_var = tk.StringVar(value=os.getenv("GOOGLE_SERVICE_ACCOUNT_PATH", ""))
-        self._reg(tk.Entry(json_frame, textvariable=self._sa_path_var, width=46,
-                 bg=t["entry_bg"], fg=t["fg"], insertbackground=t["fg"],
-                 relief=tk.FLAT, font=("Consolas", 9)), "entry").pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self._btn_browse = self._reg(tk.Button(json_frame, text=self._("btn_browse"), command=self._browse_sa_json,
-                  bg=t["btn_neutral"], fg=t["btn_neu_fg"], relief=tk.FLAT,
-                  font=("Segoe UI", 9), padx=6), "btn_neutral")
-        self._btn_browse.pack(side=tk.LEFT, padx=(4, 0))
 
         settings.columnconfigure(1, weight=1)
 
@@ -836,11 +1070,17 @@ class BotApp(tk.Tk):
         # ── Venture checkboxes ───────────────────────────────────────────────
         venture_frame = self._reg(tk.Frame(self, bg=t["bg"]), "bg")
         venture_frame.pack(fill=tk.X, padx=16, pady=(8, 0))
-        tk.Label(venture_frame, text="Venture:", bg=t["bg"], fg=t["fg"], font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT, padx=(0, 8))
+        self._reg(tk.Label(venture_frame, text="Venture:", bg=t["bg"], fg=t["fg"], font=("Segoe UI", 10, "bold")), "label").pack(side=tk.LEFT, padx=(0, 8))
         for code in self._venture_codes:
-            cb = tk.Checkbutton(venture_frame, text=code, variable=self._venture_vars[code],
-                               bg=t["bg"], fg=t["fg"], selectcolor=t["bg2"], font=("Segoe UI", 10))
-            cb.pack(side=tk.LEFT, padx=2)
+            cb = self._reg(tk.Checkbutton(
+                venture_frame, text=code, variable=self._venture_vars[code],
+                bg=t["bg"], fg=t["fg"],
+                selectcolor=t["bg2"],
+                activebackground=t["bg"], activeforeground=t["accent"],
+                font=("Segoe UI", 11, "bold"), padx=6, pady=4,
+                cursor="hand2",
+            ), "venture_cb")
+            cb.pack(side=tk.LEFT, padx=4)
 
         # ── Control buttons ───────────────────────────────────────────────────
         btn_frame = self._reg(tk.Frame(self, bg=t["bg"]), "bg")

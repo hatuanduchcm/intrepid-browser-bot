@@ -354,10 +354,10 @@ def _capture_adjustment_area(cx: int = None, cy: int = None, popup_mode: bool = 
         return None
     
 def find_order_adjustment_block(
-    max_scrolls: int = 30,
+    max_scrolls: int = 60,
     confidence: float = 0.8,
-    scroll_amount: int = -400,
-    delay: float = 0.5
+    scroll_amount: int = -150,
+    delay: float = 0.3
 ) -> Optional[dict]:
     """
     Scroll page and find Order Adjustment block using image recognition.
@@ -383,7 +383,7 @@ def find_order_adjustment_block(
                     center_x = match.left + match.width // 2
                     center_y = match.top + match.height // 2
                     # Scroll slightly so the table rows below become visible
-                    pyautogui.scroll(-200)
+                    pyautogui.scroll(-80)
                     time.sleep(0.15)
                     # Re-locate to get updated on-screen position after scroll
                     match2 = pyautogui.locateOnScreen(str(_p), confidence=confidence, grayscale=True)
@@ -535,17 +535,22 @@ def extract_adjustment_mapping_from_crop(_path, venture: str = ''):
                     parsed_variant = None
                 if parsed_variant:
                     try:
-                        # attach raw lines
                         if isinstance(parsed_variant, dict):
                             parsed_variant['__ocr_lines__'] = [l.strip() for l in txt.splitlines() if l.strip()]
-                        chk = validate_total_adjustment(parsed_variant)
+                        chk = validate_total_adjustment_with_negatives(parsed_variant)
                         if isinstance(parsed_variant, dict):
                             parsed_variant['__total_check__'] = chk
+                        # Only return if validation passed
+                        if isinstance(chk, dict) and chk.get('matches'):
+                            if isinstance(parsed_variant, dict) and '__source__' not in parsed_variant:
+                                parsed_variant['__source__'] = 'ocr'
+                            return parsed_variant
                     except Exception:
                         logger.debug('Failed to attach validation to parsed variant', exc_info=True)
-                    return parsed_variant
 
-        return None
+        # OCR totally failed or all variants have matches=False — try Gemini AI fallback
+        logger.debug('OCR produced no matched result for %s, trying Gemini fallback', _path)
+        return _gemini_fallback(_path, venture=venture)
 
     # best-effort fallback: first parsed result even if validation failed
     _best_effort = [None]
@@ -576,6 +581,8 @@ def extract_adjustment_mapping_from_crop(_path, venture: str = ''):
             if isinstance(parsed, dict):
                 parsed['__total_check__'] = check
             if isinstance(check, dict) and check.get('matches'):
+                if isinstance(parsed, dict) and '__source__' not in parsed:
+                    parsed['__source__'] = 'ocr'
                 return parsed
         except Exception:
             logger.debug('validate_total_adjustment_with_negatives raised for parsed mapping', exc_info=True)
@@ -612,6 +619,8 @@ def extract_adjustment_mapping_from_crop(_path, venture: str = ''):
                     (DEBUG_DIR / 'ocr_text.txt').write_text('\n\n'.join(f"[{k}]\n{v}" for k, v in ocr_log if v))
                 except Exception:
                     logger.debug('Failed to write ocr_text.txt')
+                if isinstance(parsed_variant, dict) and '__source__' not in parsed_variant:
+                    parsed_variant['__source__'] = 'ocr'
                 return parsed_variant
 
     # persist OCR log for inspection
@@ -620,7 +629,15 @@ def extract_adjustment_mapping_from_crop(_path, venture: str = ''):
     except Exception:
         logger.debug('Failed to write ocr_text.txt')
 
+    # --- Gemini AI fallback: OCR failed to produce a matched result ---
+    gemini_result = _gemini_fallback(_path, venture=venture)
+    if gemini_result is not None:
+        logger.info('extract_adjustment_mapping_from_crop: using Gemini AI fallback result')
+        return gemini_result
+
     # return best-effort fallback (validation + __total_check__ already attached)
+    if isinstance(_best_effort[0], dict) and '__source__' not in _best_effort[0]:
+        _best_effort[0]['__source__'] = 'ocr'
     return _best_effort[0]
 
 def parse_lines_to_map(text: str, venture: str = ''):
@@ -628,7 +645,22 @@ def parse_lines_to_map(text: str, venture: str = ''):
 
     Uses the simplified `ADJUSTMENT_COLUMNS` (ColumnName -> list of Shopee labels).
     """
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    # Normalize known OCR typos before label matching
+    _ocr_typos = [
+        ('adiustment', 'adjustment'),
+        ('adiust',     'adjust'),
+        ('totai',      'total'),
+        ('reiease',    'release'),
+        ('amouni',     'amount'),
+    ]
+    normalized_lines = []
+    for raw_line in text.splitlines():
+        low = raw_line.lower()
+        for wrong, right in _ocr_typos:
+            low = low.replace(wrong, right)
+        normalized_lines.append(low)
+    # Re-build text preserving original case for number extraction, but use normalized for label
+    lines = [l.strip() for l in normalized_lines if l.strip()]
     mapping = {}
 
     # ADJUSTMENT_COLUMNS is now ColumnName -> list of shopee labels
@@ -711,6 +743,93 @@ def parse_lines_to_map(text: str, venture: str = ''):
 #     text_only = text_only.strip().lower() if 'text_only' in locals() else line.strip().lower()
 #     return text_only, num
 
+def _gemini_fallback(_path: Optional[str], venture: str = '') -> Optional[dict]:
+    """Call Gemini AI to extract adjustment data when OCR fails or produces mismatched totals.
+
+    Converts Gemini's JSON output (extracted_items + total_adjustment_amount_in_image)
+    into the same ColumnName-keyed dict format used by the rest of the pipeline,
+    with __ocr_lines__, __total_check__ attached.
+    """
+    if not _path:
+        return None
+    try:
+        from utils.google_gemini_invoice import extract_shopee_invoice
+        from gsheets.order_adjustment_sheet import ADJUSTMENT_COLUMNS, ColumnName
+        from utils.amounts import clean_amount
+    except Exception as e:
+        logger.debug('Gemini fallback: import failed: %s', e)
+        return None
+
+    try:
+        gemini_data = extract_shopee_invoice(_path)
+    except Exception as e:
+        logger.debug('Gemini fallback: extract_shopee_invoice failed: %s', e)
+        return None
+
+    if not isinstance(gemini_data, dict):
+        return None
+
+    extracted_items = gemini_data.get('extracted_items', [])
+    total_in_image  = gemini_data.get('total_adjustment_amount_in_image')
+    is_match        = gemini_data.get('is_match', False)
+
+    if not extracted_items:
+        return None
+
+    # Build label -> ColumnName lookup (lowercase, longest-match-wins same as parse_lines_to_map)
+    label_map = {
+        cname: [lbl.strip().lower() for lbl in labs if lbl and isinstance(lbl, str)]
+        for cname, labs in ADJUSTMENT_COLUMNS.items()
+    }
+
+    mapping = {}
+    for item in extracted_items:
+        item_name = (item.get('item_name') or '').strip().lower()
+        amount    = item.get('amount')
+        if not item_name or amount is None:
+            continue
+        # Match to ColumnName using longest label match
+        best_cname, best_len = None, 0
+        for cname, labs in label_map.items():
+            for lab in labs:
+                if lab in item_name and len(lab) > best_len:
+                    best_cname, best_len = cname, len(lab)
+        if best_cname is not None:
+            # Gemini already returns clean numbers; store as string list for compatibility
+            mapping[best_cname] = [str(amount)]
+
+    if not mapping:
+        return None
+
+    # Attach Total Adjustment Amount
+    if total_in_image is not None:
+        mapping[ColumnName.TOTAL_ADJUSTMENT_AMOUNT] = [str(total_in_image)]
+
+    # Attach __ocr_lines__ (synthesized from Gemini items for traceability)
+    mapping['__ocr_lines__'] = [
+        f"{item.get('item_name', '')} {item.get('amount', '')}"
+        for item in extracted_items
+    ]
+    mapping['__gemini__'] = True  # mark as Gemini-sourced
+    mapping['__source__'] = 'gemini'
+
+    # Validate totals using same logic as OCR path
+    try:
+        check = validate_total_adjustment_with_negatives(mapping)
+        mapping['__total_check__'] = check
+    except Exception as e:
+        logger.debug('Gemini fallback: validate_total_adjustment failed: %s', e)
+        # Gemini already verified is_match; use it as fallback
+        if total_in_image is not None:
+            mapping['__total_check__'] = {
+                'expected_sum': int(total_in_image),
+                'total_value':  int(total_in_image),
+                'matches':      bool(is_match),
+            }
+
+    return mapping
+
+
 def validate_total_adjustment(parsed: dict):
     """Return comparison using TOTAL_ADJUSTMENT_AMOUNT directly (no recompute sum)."""
     try:
@@ -763,13 +882,12 @@ def validate_total_adjustment(parsed: dict):
     # Try to get venture from parsed if available, else default to None
     venture = parsed.get('__venture__', None)
 
-    # Step 1: Get total value (always use the first candidate if it's a list)
-    total_val = None
+    # Step 1: Build total_candidates list (all possible total values)
     total_val_raw = parsed.get(total_key)
     if isinstance(total_val_raw, list):
-        total_val = to_num(total_val_raw[0], venture)
+        total_candidates = [to_num(v, venture) for v in total_val_raw]
     elif total_key in parsed:
-        total_val = to_num(total_val_raw, venture)
+        total_candidates = [to_num(total_val_raw, venture)]
     else:
         try:
             from gsheets.order_adjustment_sheet import GSHEET_COLUMN
@@ -777,11 +895,13 @@ def validate_total_adjustment(parsed: dict):
         except Exception:
             header = None
         if str(total_key) in parsed:
-            total_val = to_num(parsed.get(str(total_key)), venture)
+            total_candidates = [to_num(parsed.get(str(total_key)), venture)]
         elif header and header in parsed:
-            total_val = to_num(parsed.get(header), venture)
+            total_candidates = [to_num(parsed.get(header), venture)]
         else:
-            total_val = to_num(parsed.get(total_key, '0'), venture)
+            total_candidates = [to_num(parsed.get(total_key, '0'), venture)]
+    # Use first candidate as default (for fallback reporting)
+    total_val = total_candidates[0] if total_candidates else Decimal(0)
 
     # Step 2: Build candidate lists for each key (excluding total and debug keys)
     from itertools import product
@@ -807,41 +927,41 @@ def validate_total_adjustment(parsed: dict):
             candidate_lists.append([v])
         candidate_keys.append(k)
 
-    # Step 3: Try all combinations
+    # Step 3: Try all combinations of item candidates × total candidates
     found = False
     best_combo = None
-    for combo in product(*candidate_lists):
-        s = Decimal(0)
-        converted_map = {}
-        for idx, val in enumerate(combo):
+    matched_total_val = total_val
+    for total_candidate in total_candidates:
+        for combo in product(*candidate_lists):
+            s = Decimal(0)
+            for idx, val in enumerate(combo):
+                try:
+                    nv = to_num(val, venture)
+                except Exception:
+                    nv = Decimal(0)
+                s += nv
             try:
-                nv = to_num(val, venture)
+                sum_others_int = to_int_cents(s, venture)
+                total_val_int = to_int_cents(total_candidate, venture)
             except Exception:
-                nv = Decimal(0)
-            k = candidate_keys[idx]
-            converted_map[str(k)] = to_int_cents(nv, venture)
-            s += nv
-        # For PH, sum and total should be compared as integer centavos
-        try:
-            sum_others_int = to_int_cents(s, venture)
-            total_val_int = to_int_cents(total_val, venture)
-        except Exception:
-            sum_others_int = int(s)
-            total_val_int = int(total_val)
-        matches = (total_val_int == sum_others_int)
-        if matches:
-            found = True
-            best_combo = combo
+                sum_others_int = int(s)
+                total_val_int = int(total_candidate)
+            if total_val_int == sum_others_int:
+                found = True
+                best_combo = combo
+                matched_total_val = total_candidate
+                break
+        if found:
             break
 
     # Step 4: If found, update parsed with the chosen values
     if found and best_combo is not None:
         for idx, k in enumerate(candidate_keys):
             parsed[k] = best_combo[idx]
-        # also build per-key converted map for logging
-        converted_map = {str(k): to_int_cents(to_num(v, venture), venture) for k, v in zip(candidate_keys, best_combo)}
+        # update total key to the matched candidate
+        parsed[total_key] = str(matched_total_val) if not isinstance(total_val_raw, list) else str(matched_total_val)
         sum_others_int = to_int_cents(sum([to_num(v, venture) for v in best_combo]), venture)
-        total_val_int = to_int_cents(total_val, venture)
+        total_val_int = to_int_cents(matched_total_val, venture)
         return {'expected_sum': int(total_val_int), 'total_value': int(sum_others_int), 'matches': True}
 
     # If not found, log as before (using first candidate for each key)
