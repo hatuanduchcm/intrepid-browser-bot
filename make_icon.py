@@ -27,5 +27,5 @@ from PIL import IcoImagePlugin
 with open(DST_ICO, "rb") as f:
     ico = IcoImagePlugin.IcoFile(f)
     actual = sorted(ico.sizes())
-print(f"Icon saved → {DST_ICO}")
+print(f"Icon saved -> {DST_ICO}")
 print(f"Embedded sizes: {actual}")
