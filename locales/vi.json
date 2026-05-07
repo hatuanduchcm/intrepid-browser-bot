@@ -1,6 +1,6 @@
 {
-  "app_title":        "Invoice Adjustment Bot",
-  "header_title":     "⚙  Invoice Adjustment Bot",
+  "app_title":        "IntrepidBrowser Bot",
+  "header_title":     "Sync Invoice Adjustment",
   "section_settings": " Google Sheet Settings ",
   "label_sheet_id":   "Sheet ID:",
   "label_sheet_name": "Sheet Name:",

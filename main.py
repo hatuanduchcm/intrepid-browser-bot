@@ -269,14 +269,6 @@ load_dotenv(env_path)
 
 
 def main():
-    # clear validation errors from previous run once at startup
-    try:
-        _err_file = Path('.') / 'assets' / 'debug_matches' / 'adjustment_validation_errors.jsonl'
-        if _err_file.exists():
-            _err_file.unlink()
-    except Exception:
-        pass
-
     try:
         # handle_login_event({'venture': 'VN'})
         # Example: run brand search

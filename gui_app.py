@@ -499,15 +499,30 @@ class BotApp(tk.Tk):
         for _code in self._venture_codes:
             self._venture_vars[_code].trace_add("write", lambda *_: self._save_ventures())
 
-        # Set icon — iconbitmap only (wm_iconphoto causes blurry rendering)
-        _ico = _PROJECT_ROOT / 'assets' / 'app_icon.ico'
-        _ico_meipass = _BASE_DIR / 'assets' / 'app_icon.ico'
-        _icon_path = _ico if _ico.exists() else (_ico_meipass if _ico_meipass.exists() else None)
-        if _icon_path:
-            try:
-                self.iconbitmap(default=str(_icon_path))
-            except Exception:
-                pass
+        # Set window icon: try wm_iconphoto with PNG (crisp), fall back to iconbitmap
+        self._wm_icon_photo = None
+        for _ico_path in [
+            _PROJECT_ROOT / 'assets' / 'app_icon_design.png',
+            _BASE_DIR     / 'assets' / 'app_icon_design.png',
+        ]:
+            if _ico_path.exists():
+                try:
+                    _img = Image.open(str(_ico_path)).convert('RGBA').resize((32, 32), Image.LANCZOS)
+                    self._wm_icon_photo = ImageTk.PhotoImage(_img)
+                    self.wm_iconphoto(True, self._wm_icon_photo)
+                except Exception:
+                    pass
+                break
+        if not self._wm_icon_photo:
+            # fallback: .ico file
+            for _ico_path in [_PROJECT_ROOT / 'assets' / 'app_icon.ico',
+                               _BASE_DIR     / 'assets' / 'app_icon.ico']:
+                if _ico_path.exists():
+                    try:
+                        self.iconbitmap(default=str(_ico_path))
+                    except Exception:
+                        pass
+                    break
 
         self._bot_process: mp.Process | None = None
         self._log_queue: queue.Queue = queue.Queue()
@@ -998,36 +1013,20 @@ class BotApp(tk.Tk):
         t = self._theme
         self.configure(bg=t["bg"])
 
-        # ── Header ──────────────────────────────────────────────────────────
-        header = self._reg(tk.Frame(self, bg=t["bg2"], pady=10), "header")
+        # ── Header ───────────────────────────────────────────────────────────
+        header = self._reg(tk.Frame(self, bg=t["bg2"], pady=8), "header")
         header.pack(fill=tk.X)
 
-        self._header_lbl = self._reg(tk.Label(
-            header,
-            text=self._("header_title"),
-            font=("Segoe UI", 16, "bold"),
+        # Theme toggle — RIGHT
+        theme_key = "toggle_theme_to_light" if self._theme_name == "dark" else "toggle_theme_to_dark"
+        self._toggle_btn = self._reg(tk.Button(
+            header, text=self._(theme_key), command=self._toggle_theme,
             bg=t["bg2"], fg=t["fg"],
-        ), "header_label")
-        self._header_lbl.pack(side=tk.LEFT, expand=True)
+            font=("Segoe UI", 9), relief=tk.FLAT, padx=8, pady=4, cursor="hand2", bd=0,
+        ), "btn_toggle")
+        self._toggle_btn.pack(side=tk.RIGHT, padx=(0, 6))
 
-        # Update banner (hidden by default, shown during download / ready)
-        self._update_banner = tk.Button(
-            header,
-            text="",
-            command=self._apply_update,
-            bg="#a6e3a1", fg="#1e1e2e",
-            font=("Segoe UI", 9, "bold"),
-            relief=tk.FLAT, padx=10, pady=4, cursor="hand2", bd=0,
-        )
-        # Bell button (hidden by default, shown when update available & user chose 'later')
-        self._update_bell = tk.Button(
-            header, text="\U0001f514",
-            command=self._on_bell_click,
-            bg=t["bg2"], fg="#fab387",
-            font=("Segoe UI", 13),
-            relief=tk.FLAT, padx=4, pady=2, cursor="hand2", bd=0,
-        )
-        # Don't pack yet — shown only when update available
+        # Lang toggle — RIGHT
         _flag_img = self._flag_imgs.get(self._lang)
         self._lang_btn = self._reg(tk.Button(
             header,
@@ -1038,20 +1037,17 @@ class BotApp(tk.Tk):
             relief=tk.FLAT, padx=6, pady=4, cursor="hand2", bd=0,
         ), "btn_lang")
         if _flag_img:
-            self._lang_btn._flag_ref = _flag_img  # keep GC reference
-        self._lang_btn.pack(side=tk.RIGHT, padx=(0, 4))
+            self._lang_btn._flag_ref = _flag_img
+        self._lang_btn.pack(side=tk.RIGHT, padx=(0, 2))
 
-        # Theme toggle button
-        theme_key = "toggle_theme_to_light" if self._theme_name == "dark" else "toggle_theme_to_dark"
-        self._toggle_btn = self._reg(tk.Button(
+        # Title — CENTER
+        self._header_lbl = self._reg(tk.Label(
             header,
-            text=self._(theme_key),
-            command=self._toggle_theme,
+            text=self._("header_title"),
+            font=("Segoe UI", 15, "bold"),
             bg=t["bg2"], fg=t["fg"],
-            font=("Segoe UI", 9),
-            relief=tk.FLAT, padx=10, pady=4, cursor="hand2", bd=0,
-        ), "btn_toggle")
-        self._toggle_btn.pack(side=tk.RIGHT, padx=12)
+        ), "header_label")
+        self._header_lbl.pack(side=tk.LEFT, expand=True)
 
         # ── Settings frame ─────────────────────────────────────────────────────────
         self._settings_lf = self._reg(tk.LabelFrame(
@@ -1137,16 +1133,36 @@ class BotApp(tk.Tk):
         ), "btn_neutral")
         self._settings_btn.pack(side=tk.LEFT, padx=(8, 0))
 
-        # Status indicator (colored dot) + text
+        # Status indicator (colored dot) + text — RIGHT side
         self._status_var = tk.StringVar(value=self._("status_ready"))
         self._reg(tk.Label(btn_frame, textvariable=self._status_var,
                  bg=t["bg"], fg=t["fg2"],
                  font=("Segoe UI", 10)), "status").pack(side=tk.RIGHT, padx=(0, 4))
         self._indicator = tk.Label(
             btn_frame, text="●", font=("Segoe UI", 13),
-            bg=t["bg"], fg="#a6e3a1",  # green = ready
+            bg=t["bg"], fg="#a6e3a1",
         )
         self._indicator.pack(side=tk.RIGHT)
+
+        # Update bell — RIGHT side (hidden until update available)
+        self._update_bell = tk.Button(
+            btn_frame, text="\U0001f514",
+            command=self._on_bell_click,
+            bg=t["bg"], fg="#fab387",
+            font=("Segoe UI", 13),
+            relief=tk.FLAT, padx=4, pady=2, cursor="hand2", bd=0,
+        )
+        # not packed yet
+
+        # Update banner — RIGHT side (hidden until downloading)
+        self._update_banner = tk.Button(
+            btn_frame,
+            text="",
+            command=self._apply_update,
+            bg="#a6e3a1", fg="#1e1e2e",
+            font=("Segoe UI", 9, "bold"),
+            relief=tk.FLAT, padx=10, pady=4, cursor="hand2", bd=0,
+        )
 
         # ── Progress bar ──────────────────────────────────────────────────────
         style = ttk.Style(self)
