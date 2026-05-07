@@ -713,56 +713,6 @@ def parse_lines_to_map(text: str, venture: str = ''):
     return mapping
 
 
-
-
-# def split_text_and_number_2(line: str):
-#     if not line:
-#         return "", ""
-
-#     # Normalize OCR-confused currency symbols before any parsing
-#     for _norm_pat, _norm_rep in _OCR_CURRENCY_NORMALIZE:
-#         line = _norm_pat.sub(_norm_rep, line)
-
-#     # Remove special | character that may interfere with OCR parsing, replacing it with a space to preserve word boundaries
-#     line = line.replace('|', '')
-
-#     num_pattern = r"(?:(?<=^)|(?<=\s))[-+]?\s*(?:Rp|RM|S\$|[^\w\s\|]|\w)?\s*\d[\d\.,\s oOsS]*"
-#     nums = _re.findall(num_pattern, line)
-#     num = _re.sub(r"\s+", "", nums[-1]).strip() if nums else ''
-
-#     if num:
-#         _pfx_m = _re.match(r'^([-+]?\s*(?:Rp|RM|S\$|B|[^\w\s])?\s*)', num)
-#         _pfx = _pfx_m.group(0) if _pfx_m else ''
-#         _body = num[len(_pfx):]
-#         _body = _re.sub(r'(\d)[sS]([oO])', r'\1\2', _body)
-#         if not _re.search(r'\d', _body):
-#             _body = _body.translate(str.maketrans({'o': '9', 'O': '9', 's': '5', 'S': '5'}))
-#         else:
-#             _body = _body.translate(str.maketrans({'o': '0', 'O': '0', 's': '5', 'S': '5'}))
-#         _body = _re.sub(r'[^\d.,\-]', '', _body)
-#         if _body:
-#             num = _pfx.strip() + _body
-
-#     # Fallback: if still no num, try to extract trailing number (e.g. 'FP86.00' -> '86.00')
-#     if not num:
-#         m = _re.search(r'([-+]?\d+[\d.,]*\d)', line)
-#         if m:
-#             num = m.group(1)
-
-#     # Fallback: primary regex missed because OCR confused digits with letters (e.g. "Bt" = "฿1").
-#     if not num:
-#         for word in _re.split(r'\s+', line.strip()):
-#             corrected = _try_ocr_currency_token(word)
-#             if corrected:
-#                 num = corrected
-#                 text_only = line.replace(word, ' ')
-#                 break
-#     else:
-#         text_only = _re.sub(num_pattern, " ", line)
-
-#     text_only = text_only.strip().lower() if 'text_only' in locals() else line.strip().lower()
-#     return text_only, num
-
 def _gemini_fallback(_path: Optional[str], venture: str = '') -> Optional[dict]:
     """Call Gemini AI to extract adjustment data when OCR fails or produces mismatched totals.
 
