@@ -65,7 +65,7 @@
   "update_title": "New version available!",
   "update_available": "New version available",
   "update_body": "Do you want to download and update now?",
-  "update_btn_now": "\u2b07 Update now",
+  "update_btn_now": "Update now",
   "update_btn_later": "\u23f0 Remind me later",
   "update_downloading": "Downloading",
   "update_ready": "v{tag} ready \u2014 Click to restart",
