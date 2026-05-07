@@ -70,5 +70,15 @@
   "update_downloading": "Downloading",
   "update_ready": "v{tag} ready \u2014 Click to restart",
   "update_failed": "Download failed",
-  "update_no_asset": "\u26a0 No download asset found"
+  "update_no_asset": "\u26a0 No download asset found",
+
+  "help_btn": "Help",
+  "help_about_title": "About",
+  "help_label_version": "Version:",
+  "help_label_date": "Date:",
+  "help_label_windows": "Windows:",
+  "help_label_python": "Python:",
+  "help_label_locale": "Locale:",
+  "help_btn_close": "Close",
+  "help_btn_copy": "Copy"
 }

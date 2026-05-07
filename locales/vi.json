@@ -70,5 +70,15 @@
   "update_downloading": "Đang tải",
   "update_ready": "v{tag} sẵn sàng — Nhấp để khởi động lại",
   "update_failed": "Tải thất bại",
-  "update_no_asset": "⚠ Không tìm thấy file tải"
+  "update_no_asset": "⚠ Không tìm thấy file tải",
+
+  "help_btn": "Help",
+  "help_about_title": "Thông tin ứng dụng",
+  "help_label_version": "Phiên bản:",
+  "help_label_date": "Ngày:",
+  "help_label_windows": "Windows:",
+  "help_label_python": "Python:",
+  "help_label_locale": "Ngôn ngữ:",
+  "help_btn_close": "Đóng",
+  "help_btn_copy": "Copy"
 }

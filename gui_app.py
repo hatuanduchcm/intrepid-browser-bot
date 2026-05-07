@@ -480,6 +480,96 @@ class _SettingsDialog(tk.Toplevel):
         self.destroy()
 
 
+# ── Help / About popup ────────────────────────────────────────────────────────
+
+class _HelpDialog(tk.Toplevel):
+    """Small non-modal popup anchored below the ? button, VS Code style."""
+
+    def __init__(self, parent: 'BotApp'):
+        super().__init__(parent)
+        L = parent._locale
+        t = parent._theme
+
+        self.overrideredirect(True)   # borderless
+        self.configure(bg=t['bg2'], bd=0)
+        self.attributes('-topmost', True)
+
+        import platform, datetime, locale as _locale
+        win_ver  = platform.version()
+        win_rel  = platform.release()
+        build_date = datetime.date.today().strftime('%Y-%m-%d')
+        try:
+            sys_locale = _locale.getlocale()[0] or _locale.getdefaultlocale()[0] or 'N/A'
+        except Exception:
+            sys_locale = 'N/A'
+
+        rows = [
+            (L.get('help_label_version', 'Version:'),  f'v{APP_VERSION}',                        True),
+            (L.get('help_label_date',    'Date:'),      build_date,                               False),
+            (L.get('help_label_windows', 'Windows:'),  f'Windows {win_rel}  ({win_ver})',         False),
+            (L.get('help_label_python',  'Python:'),   platform.python_version(),                 False),
+            (L.get('help_label_locale',  'Locale:'),   f'{parent._lang.upper()}  ({sys_locale})', False),
+        ]
+
+        # ── Header ─────────────────────────────────────────────────────────────
+        hdr = tk.Frame(self, bg=t['accent'], pady=6)
+        hdr.pack(fill=tk.X)
+        tk.Label(hdr, text=L.get('help_about_title', 'About'),
+                 bg=t['accent'], fg=t['accent_fg'],
+                 font=('Segoe UI', 10, 'bold'), padx=14).pack(side=tk.LEFT)
+        tk.Button(hdr, text='✕', command=self.destroy,
+                  bg=t['accent'], fg=t['accent_fg'],
+                  font=('Segoe UI', 9), relief=tk.FLAT, bd=0,
+                  padx=10, cursor='hand2').pack(side=tk.RIGHT)
+
+        # ── Rows ───────────────────────────────────────────────────────────────
+        body = tk.Frame(self, bg=t['bg2'], padx=16, pady=10)
+        body.pack(fill=tk.BOTH)
+
+        for label, value, bold in rows:
+            f = tk.Frame(body, bg=t['bg2'])
+            f.pack(fill=tk.X, pady=2)
+            tk.Label(f, text=label, bg=t['bg2'], fg=t['fg2'],
+                     font=('Segoe UI', 9), width=12, anchor=tk.W).pack(side=tk.LEFT)
+            var = tk.StringVar(value=value)
+            tk.Entry(f, textvariable=var,
+                     bg=t['bg2'], fg=t['accent'] if bold else t['fg'],
+                     font=('Segoe UI', 9, 'bold' if bold else 'normal'),
+                     relief=tk.FLAT, bd=0, state='readonly',
+                     readonlybackground=t['bg2'],
+                     width=max(28, len(value) + 2)).pack(side=tk.LEFT)
+
+        # ── Copy all button ────────────────────────────────────────────────────
+        foot = tk.Frame(self, bg=t['bg2'], pady=6)
+        foot.pack(fill=tk.X)
+        def _copy_all():
+            text = '\n'.join(f'{lbl}  {val}' for lbl, val, _ in rows)
+            self.clipboard_clear()
+            self.clipboard_append(text)
+        tk.Button(foot, text=L.get('help_btn_copy', 'Copy'),
+                  command=_copy_all,
+                  bg=t['btn_neutral'], fg=t['btn_neu_fg'],
+                  font=('Segoe UI', 9), relief=tk.FLAT,
+                  padx=14, pady=4, cursor='hand2').pack(side=tk.RIGHT, padx=14)
+
+        # ── Position: below the ? button ──────────────────────────────────────
+        self.update_idletasks()
+        btn = parent._help_btn
+        bx  = btn.winfo_rootx()
+        by  = btn.winfo_rooty() + btn.winfo_height() + 4
+        w   = self.winfo_width()
+        # keep within screen
+        sw  = self.winfo_screenwidth()
+        if bx + w > sw:
+            bx = sw - w - 8
+        self.geometry(f'+{bx}+{by}')
+
+        # close when clicking outside
+        self.bind('<FocusOut>', lambda e: self.destroy())
+        self.focus_force()
+
+
+
 # ── Main App ──────────────────────────────────────────────────────────────────
 
 class BotApp(tk.Tk):
@@ -785,6 +875,9 @@ class BotApp(tk.Tk):
     def _open_settings(self):
         _SettingsDialog(self)
 
+    def _open_help(self):
+        _HelpDialog(self)
+
     def _reg(self, widget, role: str):
         """Register widget for theme tracking."""
         self._all_widgets.append((widget, role))
@@ -983,25 +1076,29 @@ class BotApp(tk.Tk):
     def _apply_update(self):
         if not self._update_zip_path or not Path(self._update_zip_path).exists():
             return
+        if not getattr(sys, 'frozen', False):
+            # Dev mode: không có exe để restart — mở thư mục chứa zip
+            subprocess.Popen(['explorer', '/select,', self._update_zip_path])
+            return
         zip_path = self._update_zip_path
         exe_path = str(Path(sys.executable))
-        # Patch: extract vào _internal/ (runtime giữ nguyên, chỉ .pyc + assets thay)
-        # Full:  extract vào app_dir (thay toàn bộ kể cả _internal/)
-        if self._update_is_patch and getattr(sys, 'frozen', False):
+        if self._update_is_patch:
             dest_dir = str(Path(sys.executable).parent / '_internal')
         else:
-            dest_dir = str(_PROJECT_ROOT)
-        bat_lines = [
-            '@echo off',
-            'timeout /t 2 /nobreak >nul',
-            f'powershell -Command "Expand-Archive -Path \'\'{zip_path}\'\' -DestinationPath \'\'{dest_dir}\'\' -Force"',
-            f'del /f /q "{zip_path}"',
-            f'start "" "{exe_path}"',
-            'del /f /q "%~f0"',
+            dest_dir = str(Path(sys.executable).parent)
+        # Dùng .ps1 để tránh vấn đề escape path trong inline cmd
+        ps1_lines = [
+            'Start-Sleep -Seconds 2',
+            f'Expand-Archive -LiteralPath "{zip_path}" -DestinationPath "{dest_dir}" -Force',
+            f'Remove-Item -LiteralPath "{zip_path}" -Force -ErrorAction SilentlyContinue',
+            f'Start-Process "{exe_path}"',
         ]
-        bat_path = Path(tempfile.gettempdir()) / 'iab_updater.bat'
-        bat_path.write_text('\n'.join(bat_lines), encoding='utf-8')
-        subprocess.Popen(['cmd', '/c', str(bat_path)], creationflags=subprocess.CREATE_NO_WINDOW)
+        ps1_path = Path(tempfile.gettempdir()) / 'iab_updater.ps1'
+        ps1_path.write_text('\r\n'.join(ps1_lines), encoding='utf-8')
+        subprocess.Popen(
+            ['powershell', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', str(ps1_path)],
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
         self.destroy()
         sys.exit(0)
 
@@ -1014,6 +1111,14 @@ class BotApp(tk.Tk):
         # ── Header ───────────────────────────────────────────────────────────
         header = self._reg(tk.Frame(self, bg=t["bg2"], pady=8), "header")
         header.pack(fill=tk.X)
+
+        # Help / About button — RIGHT
+        self._help_btn = self._reg(tk.Button(
+            header, text="?", command=self._open_help,
+            bg=t["bg2"], fg=t["fg"],
+            font=("Segoe UI", 11, "bold"), relief=tk.FLAT, padx=8, pady=4, cursor="hand2", bd=0,
+        ), "btn_toggle")
+        self._help_btn.pack(side=tk.RIGHT, padx=(0, 4))
 
         # Theme toggle — RIGHT
         theme_key = "toggle_theme_to_light" if self._theme_name == "dark" else "toggle_theme_to_dark"
