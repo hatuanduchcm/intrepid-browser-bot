@@ -1000,7 +1000,7 @@ class BotApp(tk.Tk):
         self._update_available_zip = zip_url
         self._update_available_patch = patch_url or ''
         try:
-            self._update_bell.pack(side=tk.RIGHT, padx=(0, 2))
+            self._update_bell.pack(side=tk.LEFT, padx=(8, 0))
             self._bell_blink_on = True
             self._blink_bell()
         except Exception:
@@ -1119,6 +1119,27 @@ class BotApp(tk.Tk):
             font=("Segoe UI", 11, "bold"), relief=tk.FLAT, padx=8, pady=4, cursor="hand2", bd=0,
         ), "btn_toggle")
         self._help_btn.pack(side=tk.RIGHT, padx=(0, 4))
+
+        # Update bell — LEFT in header (hidden until update available)
+        self._update_bell = tk.Button(
+            header, text="\U0001f514",
+            command=self._on_bell_click,
+            bg=t["bg2"], fg="#fab387",
+            font=("Segoe UI", 13),
+            relief=tk.FLAT, padx=6, pady=2, cursor="hand2", bd=0,
+        )
+        # not packed yet
+
+        # Update banner — LEFT in header (hidden until downloading)
+        self._update_banner = tk.Button(
+            header,
+            text="",
+            command=self._apply_update,
+            bg="#a6e3a1", fg="#1e1e2e",
+            font=("Segoe UI", 9, "bold"),
+            relief=tk.FLAT, padx=10, pady=4, cursor="hand2", bd=0,
+        )
+        # not packed yet
 
         # Theme toggle — RIGHT
         theme_key = "toggle_theme_to_light" if self._theme_name == "dark" else "toggle_theme_to_dark"
@@ -1247,27 +1268,7 @@ class BotApp(tk.Tk):
         )
         self._indicator.pack(side=tk.RIGHT)
 
-        # Update bell — RIGHT side (hidden until update available)
-        self._update_bell = tk.Button(
-            btn_frame, text="\U0001f514",
-            command=self._on_bell_click,
-            bg=t["bg"], fg="#fab387",
-            font=("Segoe UI", 13),
-            relief=tk.FLAT, padx=4, pady=2, cursor="hand2", bd=0,
-        )
-        # not packed yet
-
-        # Update banner — RIGHT side (hidden until downloading)
-        self._update_banner = tk.Button(
-            btn_frame,
-            text="",
-            command=self._apply_update,
-            bg="#a6e3a1", fg="#1e1e2e",
-            font=("Segoe UI", 9, "bold"),
-            relief=tk.FLAT, padx=10, pady=4, cursor="hand2", bd=0,
-        )
-
-        # ── Progress bar ──────────────────────────────────────────────────────
+        # ── Progress bar ──────────────────────────────────────────────────────────
         style = ttk.Style(self)
         style.theme_use("clam")
         style.configure("bot.Horizontal.TProgressbar",
