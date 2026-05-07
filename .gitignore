@@ -16,3 +16,6 @@ dist/
 build/
 *.spec
 key/
+
+# OAuth token cache
+assets/.gauth_token.json

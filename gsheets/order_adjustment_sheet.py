@@ -142,9 +142,10 @@ def find_columnname_by_shopee_label(label: str) -> Union[ColumnName, None]:
     return None
 
 
-def map_adjustment_keys_to_columns(sheet_id: str, sheet_name: str) -> Dict[str, int]:
+def map_adjustment_keys_to_columns() -> Dict[str, int]:
     """Return a dict mapping each ADJUSTMENT_COLUMN_KEYS entry to its column number
     (or None if missing) for the given sheet. Also saves to dist/adjustment_col_map.json.
+    Reads GSHEET_ID and GSHEET_SHEET_NAME from environment variables.
     """
     # Build a list of expected G_SHEET_COL names in the same order as ADJUSTMENT_COLUMNS
     names = []
@@ -155,7 +156,7 @@ def map_adjustment_keys_to_columns(sheet_id: str, sheet_name: str) -> Dict[str, 
             names.append(gname)
             name_to_colname[gname] = cname
 
-    raw_map = save_adjustment_columns_map(sheet_id, sheet_name, names, output_path='dist/adjustment_col_map.json')
+    raw_map = save_adjustment_columns_map(names, output_path='dist/adjustment_col_map.json')
     # convert back to ColumnName -> colnum mapping
     result = {}
     for gname, col in raw_map.items():
@@ -169,46 +170,12 @@ def map_adjustment_keys_to_columns(sheet_id: str, sheet_name: str) -> Dict[str, 
 # Build from GSHEET_COLUMN mapping (ColumnName -> header string)
 ADJUSTMENT_COLUMN_KEYS = [v for v in GSHEET_COLUMN.values()]
 
-# Path for caching the OAuth2 access token between subprocess runs (valid ~1 hour)
-_TOKEN_CACHE_PATH = Path(__file__).resolve().parents[1] / 'assets' / '.gauth_token.json'
-
-
-def _apply_token_cache(creds):
-    """Restore cached access token to skip the oauth2.googleapis.com round-trip."""
-    import json as _j, datetime
-    try:
-        if _TOKEN_CACHE_PATH.exists():
-            c = _j.loads(_TOKEN_CACHE_PATH.read_text(encoding='utf-8'))
-            token = c.get('token')
-            expiry_str = c.get('expiry')
-            if token and expiry_str:
-                expiry = datetime.datetime.fromisoformat(expiry_str)
-                # Use cached token only if valid for at least 5 more minutes
-                if expiry > datetime.datetime.utcnow() + datetime.timedelta(minutes=5):
-                    creds.token = token
-                    creds._expiry = expiry
-                    logger.debug('OAuth2: using cached token (expires %s)', expiry_str)
-                    return True
-    except Exception:
-        pass
-    return False
-
-
-def _save_token_cache(creds):
-    """Persist the current access token so future subprocess starts can reuse it."""
-    import json as _j
-    try:
-        if creds.token and creds.expiry:
-            _TOKEN_CACHE_PATH.write_text(
-                _j.dumps({'token': creds.token, 'expiry': creds.expiry.isoformat()}),
-                encoding='utf-8',
-            )
-    except Exception:
-        pass
-
-
-def _open_sheet(sheet_id: str, sheet_name: str):
+def _open_sheet():
     global LAST_WORKSHEET, LAST_HEADER_MAP
+    sheet_id = os.getenv('GSHEET_ID')
+    sheet_name = os.getenv('GSHEET_SHEET_NAME')
+    if not sheet_id or not sheet_name:
+        raise RuntimeError('GSHEET_ID and GSHEET_SHEET_NAME must be set in environment')
     # If a LAST_WORKSHEET was set earlier, reuse it only when its title matches
     if LAST_WORKSHEET is not None:
         try:
@@ -235,15 +202,8 @@ def _open_sheet(sheet_id: str, sheet_name: str):
         logger.error('Failed to load service account credentials from GOOGLE_SERVICE_ACCOUNT_PATH: %s', e)
         raise
 
-    # Restore cached token to avoid POST to oauth2.googleapis.com when token still valid
-    _apply_token_cache(creds)
-
     gc = gspread.Client(auth=creds)
     sh = gc.open_by_key(sheet_id)
-
-    # Save token after first successful API call (token is now populated)
-    _save_token_cache(creds)
-
     worksheet = sh.worksheet(sheet_name)
     try:
         LAST_WORKSHEET = worksheet
@@ -252,7 +212,7 @@ def _open_sheet(sheet_id: str, sheet_name: str):
     return worksheet
 
 
-def update_columns_for_order(sheet_id: str, sheet_name: str, order_id: str, updates: Dict[str, str], row_number: int = None):
+def update_columns_for_order(order_id: str, updates: Dict[str, str], row_number: int = None):
     """
     Find the row that contains `order_id` in any of the columns (Order ID column) and update
     the given columns by header name with values from `updates`.
@@ -260,9 +220,10 @@ def update_columns_for_order(sheet_id: str, sheet_name: str, order_id: str, upda
     - `updates` keys are header names (e.g., "Refund Amount") and values are the new cell values.
     - The function will find header row (row 1), map header names to column numbers,
       locate the row matching `order_id`, then perform a batch update.
+    - Reads GSHEET_ID and GSHEET_SHEET_NAME from environment variables.
     """
     try:
-        worksheet = _open_sheet(sheet_id, sheet_name)
+        worksheet = _open_sheet()
     except Exception:
         raise
 
@@ -342,7 +303,7 @@ def update_columns_for_order(sheet_id: str, sheet_name: str, order_id: str, upda
     return row_number
 
 
-def extract_order_index_map(sheet_id: str, sheet_name: str, output_path: str = None) -> Dict[str, dict]:
+def extract_order_index_map(output_path: str = None) -> Dict[str, dict]:
     """
     Đọc worksheet, tìm các cột `Venture`, `Brand Name`, `Platform`, `Order ID`
     và sinh dict mapping order_id -> { 'index': row_number, 'Venture': ..., 'Brand Name': ..., 'Platform': ... }
@@ -351,10 +312,11 @@ def extract_order_index_map(sheet_id: str, sheet_name: str, output_path: str = N
 
     Chỉ fetch các cột cần thiết qua batch_get (thay vì get_all_values() toàn bộ sheet)
     để giảm lượng data transfer — quan trọng khi sheet có nhiều cột.
+    Đọc GSHEET_ID và GSHEET_SHEET_NAME từ environment variables.
     """
     import json
 
-    worksheet = _open_sheet(sheet_id, sheet_name)
+    worksheet = _open_sheet()
     # LAST_HEADER_MAP đã được cache bởi _open_sheet; dùng lại để tránh gọi row_values(1) thêm
     global LAST_HEADER_MAP
     if LAST_HEADER_MAP:
@@ -440,15 +402,16 @@ def extract_order_index_map(sheet_id: str, sheet_name: str, output_path: str = N
     return data_map
 
 
-def save_adjustment_columns_map(sheet_id: str, sheet_name: str, column_names: List[str], output_path: str = 'dist/adjustment_col_map.json') -> Dict[str, int]:
+def save_adjustment_columns_map(column_names: List[str], output_path: str = 'dist/adjustment_col_map.json') -> Dict[str, int]:
     """
     Map provided `column_names` (exact header text) to column numbers in the sheet and
     save the mapping to `output_path` as JSON with structure {col_name: col_number}.
     Returns the mapping dict.
+    Reads GSHEET_ID and GSHEET_SHEET_NAME from environment variables.
     """
     import json
 
-    worksheet = _open_sheet(sheet_id, sheet_name)
+    worksheet = _open_sheet()
     header = worksheet.row_values(1)
     header_map = {h.strip(): i + 1 for i, h in enumerate(header)}
 
@@ -489,14 +452,15 @@ def save_adjustment_columns_map(sheet_id: str, sheet_name: str, column_names: Li
     return mapping
 
 
-def save_header_map(sheet_id: str, sheet_name: str, output_path: str = 'dist/header_map.json') -> Dict[str, int]:
+def save_header_map(output_path: str = 'dist/header_map.json') -> Dict[str, int]:
     """
     Read header row and save a mapping header_text -> column_number to `output_path`.
     Returns the mapping.
+    Reads GSHEET_ID and GSHEET_SHEET_NAME from environment variables.
     """
     import json
 
-    worksheet = _open_sheet(sheet_id, sheet_name)
+    worksheet = _open_sheet()
     header = worksheet.row_values(1)
     header_map = {h.strip(): i + 1 for i, h in enumerate(header)}
 

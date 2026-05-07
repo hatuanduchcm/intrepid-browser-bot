@@ -7,12 +7,11 @@ from brand.handler_search_brand import handle_search_brand_event
 from order.handler_order_flow import handle_order_flow_event
 from gsheets.order_adjustment_sheet import extract_order_index_map, update_columns_for_order
 import logging
-from brand.handler_search_brand import handle_search_brand_event
 
 logger = logging.getLogger(__name__)
 
 
-def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = None, stats_queue=None):
+def run_batch_process(orders_sheet_path: str = None, stats_queue=None):
     """Orchestrate batch processing:
 
     1. Extract order index map from the given sheet (order -> row/index and metadata).Browser
@@ -20,7 +19,7 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
     2. Loop over each order_id and fetch adjustment info
     3. After processing, upload relevant adjustment info back to the sheet via `update_columns_for_order`.
 
-    `sheet_id` and `sheet_name` identify the Google Sheet to read/write.
+    Reads GSHEET_ID and GSHEET_SHEET_NAME from environment variables.
     """
     # 1) extract mapping
     _debug_dir = Path(__file__).parent / 'assets' / 'debug_matches'
@@ -65,7 +64,7 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
             return None
         return str(max(candidates, key=lambda p: p.stat().st_mtime))
 
-    mapping = extract_order_index_map(sheet_id, sheet_name, output_path=orders_sheet_path)
+    mapping = extract_order_index_map(output_path=orders_sheet_path)
     logger.info('Found %d orders to process', len(mapping))
 
     # 2) iterate — sort by venture first, then platform to group logins together
@@ -231,7 +230,7 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
             # ── Push to gsheet ────────────────────────────────────────────
             logger.info('[%s] Pushing to gsheet: %s', order_id, updates)
             try:
-                update_columns_for_order(sheet_id, sheet_name, order_id, updates, row_number=meta.get('index'))
+                update_columns_for_order(order_id, updates, row_number=meta.get('index'))
                 logger.info('[%s] SUCCESS — gsheet updated: %s', order_id, updates)
                 _stat('success', order_id=order_id, venture=venture, brand=platform)
             except Exception as e:
@@ -260,38 +259,20 @@ def run_batch_process(sheet_id: str, sheet_name: str, orders_sheet_path: str = N
 
 import logging
 
-# Configure root logger to show debug messages on console during development
 logging.basicConfig(level=logging.DEBUG, format='%(levelname)s:%(name)s:%(message)s')
 
 env_path = Path('.') / '.env'
 load_dotenv(env_path)
 
 
-
 def main():
-    try:
-        # handle_login_event({'venture': 'VN'})
-        # Example: run brand search
-        # handle_search_brand_event({'brand': 'OATSIDE'})
-
-        # res = handle_order_flow_event({'order_id': '2603264PETUQB4'})
-        # print('Order flow result:', res)
-        # If SHEET_ID/SHEET_NAME provided in env, run batch process; otherwise run example flow
-        import os
-        sheet_id = os.getenv('GSHEET_ID')
-        sheet_name = os.getenv('GSHEET_SHEET_NAME')
-        if sheet_id and sheet_name:
-            print('Running batch process for', sheet_id, sheet_name)
-            run_batch_process(sheet_id, sheet_name)
-        else:
-            logging.info('GSHEET_ID or GSHEET_SHEET_NAME not set in environment; skipping batch process and running example flow')
-            # handle_login_event({'venture': 'VN'})
-            # # Example: run brand search
-            # handle_search_brand_event({'brand': 'OATSIDE'})
-            # res = handle_order_flow_event({'order_id': '2603264PETUQB4'})
-            # print('Order flow result:', res)
-    except Exception as e:
-        print('Errors:', e)
+    import os
+    sheet_id = os.getenv('GSHEET_ID')
+    sheet_name = os.getenv('GSHEET_SHEET_NAME')
+    if sheet_id and sheet_name:
+        run_batch_process()
+    else:
+        logging.info('GSHEET_ID or GSHEET_SHEET_NAME not set in environment')
 
 
 if __name__ == '__main__':

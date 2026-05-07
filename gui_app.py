@@ -127,7 +127,7 @@ class _QueueHandler(logging.Handler):
 
 
 # ── Bot subprocess entry point (must be at module level for pickling) ─────────
-def _bot_process_target(sheet_id: str, sheet_name: str, log_queue, project_root: str, stats_queue=None):
+def _bot_process_target(log_queue, project_root: str, stats_queue=None):
     """Runs the bot in a separate process so it can be terminated instantly."""
     import logging as _log
     from pathlib import Path as _Path
@@ -148,13 +148,11 @@ def _bot_process_target(sheet_id: str, sheet_name: str, log_queue, project_root:
     _root.handlers.clear()
     _root.addHandler(_handler)
 
-    # Re-load .env inside subprocess
-    _load_dotenv(_Path(project_root) / '.env')
-    _os.environ["GSHEET_ID"] = sheet_id
-    _os.environ["GSHEET_SHEET_NAME"] = sheet_name
+    # Re-load .env inside subprocess (override=False: không ghi đè env vars đã có từ parent)
+    _load_dotenv(_Path(project_root) / '.env', override=False)
 
     from main import run_batch_process
-    run_batch_process(sheet_id, sheet_name, stats_queue=stats_queue)
+    run_batch_process(stats_queue=stats_queue)
 
 
 # ── Theme definitions ─────────────────────────────────────────────────────────
@@ -1628,7 +1626,7 @@ class BotApp(tk.Tk):
 
         self._bot_process = mp.Process(
             target=_bot_process_target,
-            args=(sheet_id, sheet_name, self._proc_log_queue, str(_PROJECT_ROOT), self._stats_queue),
+            args=(self._proc_log_queue, str(_PROJECT_ROOT), self._stats_queue),
             daemon=True,
         )
         self._bot_process.start()
